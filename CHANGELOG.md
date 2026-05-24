@@ -24,6 +24,9 @@ inbound adapters (inbox + policy) and the orchestration runtime.
   `lazytools.safety.active_scope` when `lazytoolkit` is installed, so a moved
   guarded tool can still bind a one-shot send grant to the running task. The
   import is guarded — `import lazypulse` works without `lazytoolkit`.
+- Widened the `lazybridge` pin to `>=0.7.9,<0.10` so LazyPulse installs
+  alongside lazybridge 0.9.0 (verified runtime-compatible).
+- Ship a `py.typed` marker so downstream consumers get LazyPulse's types.
 
 ### Deprecated (shims removed in a later release)
 - `from lazypulse.adapters.gmail import GmailTools` (and `GmailClient`,

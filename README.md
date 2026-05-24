@@ -32,7 +32,10 @@ pip install 'lazypulse[dev]'         # test + lint toolchain
 ```
 
 A bare `pip install lazypulse` does **not** pull the Google libraries or
-starlette — those come only with the extras.
+starlette — those come only with the extras. The `[gmail]` / `[telegram]`
+extras pull `lazytoolkit[...]`: the inbound adapters (inbox + trust policy)
+live in LazyPulse, while the matching clients and guarded send tools
+(`GmailClient`, `GmailTools`, …) live in `lazytools.connectors.*`.
 
 You'll also need an API key for whatever model your agent uses (e.g.
 `ANTHROPIC_API_KEY`), exactly as with lazybridge.
@@ -89,9 +92,8 @@ pass a `policy=` instead, and a `PulseAgent` with adapters but neither will
 ```python
 from lazybridge import LLMEngine, Session, Store
 from lazypulse import PulseAgent
-from lazypulse.adapters.gmail import (
-    GmailClient, GmailInbox, GmailInboxConfig, GmailPolicy, GmailTools,
-)
+from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
+from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install 'lazypulse[gmail]'
 
 OWNER = "you@example.com"
 SCOPES = ["https://www.googleapis.com/auth/gmail.metadata"]

@@ -61,7 +61,7 @@ of any single Plan run.
 ## A note on checkpoints (vs. the original v3 sketch)
 
 The v3 plan sketched passing `plan_state={"checkpoint_key": ..., "resume": False}`
-into the engine per task. That does not match lazybridge 0.7.9: `Plan`'s
+into the engine per task. That does not match lazybridge's API: `Plan`'s
 `checkpoint_key` and `resume` are **constructor** arguments, and the
 `plan_state=` run-kwarg is a `PlanState` *dataclass* used for resume — not a
 config dict. Moreover, `Agent.run()` deliberately does not thread `store` /

@@ -109,6 +109,11 @@ class PulseRecord(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     source_event_id: str | None = None
+    # Originating adapter name + its inbound metadata, carried so a completed
+    # task can be routed back to where it came from (see ``Responder``). A
+    # programmatically scheduled task has no source.
+    source: str | None = None
+    inbound_metadata: dict[str, Any] = Field(default_factory=dict)
     identity: Identity | None = None
     action_class: ActionClass = ActionClass.READ_PUBLIC
     decision: PolicyDecision | None = None

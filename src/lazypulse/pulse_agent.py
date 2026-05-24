@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from lazybridge import Agent
 
 from lazypulse import store_keys
+from lazypulse.adapters.base import Responder
 from lazypulse.models import (
     ActionClass,
     Identity,
@@ -80,6 +81,11 @@ class PulseAgent(Agent):
                 "store=Store(db='pulse.db') (persistent)."
             )
         self._adapters: list[Adapter] = list(adapters or [])
+        # Name → adapter, for routing a completed task's reply back to its
+        # source (see ``_maybe_reply``).
+        self._adapters_by_name: dict[str, Adapter] = {
+            getattr(a, "name", repr(a)): a for a in self._adapters
+        }
         self._policy = policy
         self._unsafe_allow_all = unsafe_allow_all
         # Safety gate: a PulseAgent ingesting from external adapters with no
@@ -340,6 +346,8 @@ class PulseAgent(Agent):
             created_at=now,
             run_at=now,
             source_event_id=msg.message_id,
+            source=msg.source,
+            inbound_metadata=msg.metadata,
             identity=identity,
             action_class=msg.requested_action,
             decision=decision,
@@ -437,7 +445,26 @@ class PulseAgent(Agent):
             # happened, but the ledger is no longer ours to write.
             self._emit("pulse.write_conflict", {"task_id": started.task_id, "would_be_status": final.status})
             return None
+        if final.status == "completed":
+            await self._maybe_reply(final)
         return final.status
+
+    async def _maybe_reply(self, record: PulseRecord) -> None:
+        """Route a completed task's output back to its originating conversation.
+
+        Only fires when the source adapter implements :class:`Responder` (e.g.
+        ``TelegramInbox``) and the worker produced text. Best-effort: a reply
+        failure is logged to the Session but never un-completes the task."""
+        if record.source is None or not record.worker_text:
+            return
+        adapter = self._adapters_by_name.get(record.source)
+        if not isinstance(adapter, Responder):
+            return
+        assert self.store is not None
+        try:
+            await adapter.reply(record, record.worker_text, store=self.store, session=self.session)
+        except Exception as exc:
+            self._emit("pulse.reply_error", {"task_id": record.task_id, "error": f"{type(exc).__name__}: {exc}"})
 
     # ------------------------------------------------------------------ #
     # Crash recovery

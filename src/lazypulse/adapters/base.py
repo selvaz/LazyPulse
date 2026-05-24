@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from lazybridge import Session, Store
 
-    from lazypulse.models import InboundMessage
+    from lazypulse.models import InboundMessage, PulseRecord
 
 
 @runtime_checkable
@@ -46,3 +46,31 @@ class Adapter(Protocol):
         store: Store,
         session: Session | None,
     ) -> list[InboundMessage]: ...
+
+
+@runtime_checkable
+class Responder(Protocol):
+    """An adapter that can send a reply back to a message's origin.
+
+    Optional: implement it on an adapter for a *conversational* channel. When
+    a task completes, the PulseAgent routes the worker's ``worker_text`` back
+    to the originating conversation (e.g. the Telegram chat the message came
+    from) via :meth:`reply`.
+
+    Replying to the sender that was already authorized to reach the worker
+    needs **no extra confirmation** — it is a direct response to authorized
+    inbound, not an outbound send to a new recipient (which the tool layer
+    still gates). The reply is best-effort: a failure never un-completes the
+    task.
+    """
+
+    name: str
+
+    async def reply(
+        self,
+        record: PulseRecord,
+        text: str,
+        *,
+        store: Store,
+        session: Session | None,
+    ) -> None: ...

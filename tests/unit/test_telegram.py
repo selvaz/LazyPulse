@@ -219,3 +219,65 @@ def test_require_confirmation_false_allows_reply() -> None:
     tools = TelegramTools(svc, allowed_chat_ids=[42], require_confirmation=False)
     tools._send_message(chat_id=42, text="hi")
     assert len(svc.sent) == 1
+
+
+# --- Conversational auto-reply (Responder) ----------------------------- #
+
+
+async def test_completed_task_auto_replies_to_origin_chat() -> None:
+    from lazypulse import PulseAgent
+    from lazypulse.testing import FakeClock, MockEngine
+
+    store = Store()
+    svc = FakeService([_update(1, user_id=42, chat_id=42, text="ping")])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["pong"]),
+        store=store,
+        clock=FakeClock(),
+        policy=TelegramPolicy(owner_ids=[42]),
+        adapters=[inbox],
+    )
+    # One beat: drain → record → run → complete → reply.
+    await pulse.tick_once()
+    assert svc.sent == [{"chat_id": 42, "text": "pong"}]
+
+
+async def test_auto_reply_can_be_disabled() -> None:
+    from lazypulse import PulseAgent
+    from lazypulse.testing import FakeClock, MockEngine
+
+    store = Store()
+    svc = FakeService([_update(1, user_id=42, chat_id=42, text="ping")])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_with_output=False))
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["pong"]),
+        store=store,
+        clock=FakeClock(),
+        policy=TelegramPolicy(owner_ids=[42]),
+        adapters=[inbox],
+    )
+    await pulse.tick_once()
+    assert svc.sent == []
+
+
+async def test_rejected_message_never_replies() -> None:
+    from lazypulse import PulseAgent
+    from lazypulse.testing import FakeClock, MockEngine
+
+    store = Store()
+    # Stranger → rejected by policy → worker never runs → no reply.
+    svc = FakeService([_update(1, user_id=999, chat_id=999, text="hi")])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["should-not-send"]),
+        store=store,
+        clock=FakeClock(),
+        policy=TelegramPolicy(owner_ids=[42]),
+        adapters=[inbox],
+    )
+    await pulse.tick_once()
+    assert svc.sent == []

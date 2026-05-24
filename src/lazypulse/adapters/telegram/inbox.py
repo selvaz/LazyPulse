@@ -29,6 +29,8 @@ from lazypulse.models import ActionClass, InboundMessage
 if TYPE_CHECKING:
     from lazybridge import Session, Store
 
+    from lazypulse.models import PulseRecord
+
 
 @dataclass
 class TelegramInboxConfig:
@@ -40,6 +42,11 @@ class TelegramInboxConfig:
     bot_id: str
     max_results: int = 100
     default_action: ActionClass = ActionClass.READ_PUBLIC
+    #: When True (default), a completed task's worker output is sent back to
+    #: the originating chat automatically — making the bot conversational with
+    #: no extra wiring. Set False for a fire-and-forget / triage bot that
+    #: should not reply.
+    reply_with_output: bool = True
 
 
 class TelegramInbox:
@@ -88,6 +95,28 @@ class TelegramInbox:
         if confirmed != offset:
             store.write(offset_key, {"offset": confirmed})
         return out
+
+    async def reply(
+        self,
+        record: PulseRecord,
+        text: str,
+        *,
+        store: Store,
+        session: Session | None = None,
+    ) -> None:
+        """Send the worker's output back to the chat the message came from.
+
+        This implements the :class:`~lazypulse.adapters.base.Responder`
+        protocol, so a ``PulseAgent`` calls it automatically when a Telegram-
+        sourced task completes. Replying to the original (already-authorized)
+        chat needs no confirmation — unlike :class:`TelegramTools`, which can
+        target arbitrary chats and stays gated."""
+        if not self._config.reply_with_output:
+            return
+        chat_id = (record.inbound_metadata or {}).get("chat_id")
+        if chat_id is None or not text:
+            return
+        self._client.send_message(chat_id=chat_id, text=text)
 
     def _to_inbound(self, event_id: str, msg: dict[str, Any]) -> InboundMessage:
         frm = msg.get("from") or {}

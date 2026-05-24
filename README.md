@@ -250,6 +250,16 @@ Chat platforms make the policy *simpler and stronger* than email:
 spoofed, so `TelegramPolicy` keys on `owner_ids=[...]` directly — no
 DKIM/DMARC parsing. A bot or a stranger is rejected before the worker runs.
 
+### Talking back — conversational adapters
+
+An adapter can also implement `reply()` (the `Responder` protocol). When a
+task completes, the PulseAgent sends the worker's output straight back to the
+conversation it came from — so `TelegramInbox` is a **two-way** channel out of
+the box: message the bot, get the agent's answer back, no tool wiring. Because
+the reply goes to the *already-authorized* sender, it needs no confirmation;
+sending to a *new* recipient still goes through a gated tool (`TelegramTools`,
+`GmailTools`). Turn auto-reply off with `TelegramInboxConfig(reply_with_output=False)`.
+
 ### PulseRecord — the task ledger
 
 Every message becomes one `PulseRecord` in the Store, moving through

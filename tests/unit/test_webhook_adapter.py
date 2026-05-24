@@ -160,6 +160,21 @@ async def test_buffer_full_returns_503() -> None:
     assert r3.status_code == 503
 
 
+async def test_buffer_full_does_not_burn_nonce() -> None:
+    # A 503 (buffer full) must NOT consume the nonce: once the buffer drains,
+    # a retry with the same nonce is accepted, not rejected as a replay.
+    adapter = WebhookAdapter(max_buffer_size=1)
+    store = Store()
+    async with _client(adapter) as client:
+        r1 = await client.post("/inbound", json={"message_id": "1", "text": "a", "nonce": "n1"})
+        r2 = await client.post("/inbound", json={"message_id": "2", "text": "b", "nonce": "n2"})
+        assert r1.status_code == 202
+        assert r2.status_code == 503  # buffer full → n2 must stay unused
+        await adapter.drain(store=store, session=None)  # frees the buffer
+        r3 = await client.post("/inbound", json={"message_id": "2", "text": "b", "nonce": "n2"})
+    assert r3.status_code == 202  # retry accepted — the nonce was never burned
+
+
 async def test_seen_nonces_cleared_after_drain() -> None:
     # Nonces received before first drain are held in _seen_nonces;
     # after drain flushes them to the Store, the in-memory set is cleared.

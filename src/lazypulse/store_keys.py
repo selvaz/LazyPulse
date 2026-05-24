@@ -32,6 +32,11 @@ WEBHOOK_NONCE = "pulse:webhook:nonce:{nonce}"
 #: only past updates the PulseAgent has already recorded (at-least-once).
 TG_OFFSET = "pulse:telegram:offset:{bot}"
 
+#: Telegram auto-reply throttle watermark (per bot + chat). Holds the
+#: timestamp of the last auto-reply so the Responder path can rate-limit
+#: replies into a single chat and break runaway reply loops.
+TG_REPLY_THROTTLE = "pulse:telegram:reply_throttle:{bot}:{chat}"
+
 #: Prefix used to enumerate every task record in the Store.
 TASK_PREFIX = "pulse:task:"
 
@@ -45,3 +50,7 @@ def task_key(task_id: str) -> str:
 
 def event_key(event_id: str) -> str:
     return EVENT.format(event_id=event_id)
+
+
+def tg_reply_throttle_key(bot: str, chat: str) -> str:
+    return TG_REPLY_THROTTLE.format(bot=bot, chat=chat)

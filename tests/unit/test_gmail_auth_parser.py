@@ -99,11 +99,20 @@ def test_no_pinning_accepts_any_authserv_id() -> None:
     assert parse_authentication_results("attacker.test; dkim=pass; spf=pass; dmarc=pass")["dkim"] is True
 
 
-def test_authserv_id_prefix_match() -> None:
-    # mx.google.com covers subdomain variants like mx.google.com (exact) only.
+def test_authserv_id_match_is_exact() -> None:
+    # The pinned authserv-id must match exactly — not as a prefix or suffix.
     header = "mx.google.com; dkim=pass; dmarc=pass"
     assert parse_authentication_results(header, trusted_authserv_id="mx.google.com")["dkim"] is True
-    # A superset prefix e.g. "mx" must NOT match "mx.google.com" in reverse.
+
+    # A different host that the trusted id is a substring of must NOT match.
     header2 = "evil-mx.google.com; dkim=pass; dmarc=pass"
-    # "evil-mx.google.com" does not start with "mx.google.com"
     assert parse_authentication_results(header2, trusted_authserv_id="mx.google.com")["dkim"] is False
+
+    # A look-alike that *starts with* the trusted id (the classic prefix-match
+    # bypass) must NOT match: "mx.google.com.evil.com".startswith("mx.google.com").
+    header3 = "mx.google.com.evil.com; dkim=pass; dmarc=pass"
+    assert parse_authentication_results(header3, trusted_authserv_id="mx.google.com")["dkim"] is False
+
+    # A subdomain of the trusted host is also not the trusted host.
+    header4 = "relay.mx.google.com; dkim=pass; dmarc=pass"
+    assert parse_authentication_results(header4, trusted_authserv_id="mx.google.com")["dkim"] is False

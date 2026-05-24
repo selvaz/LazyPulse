@@ -44,9 +44,10 @@ class GmailInboxConfig:
     default_action: ActionClass = ActionClass.READ_PUBLIC
     #: Authserv-id that the receiving MTA stamps on its
     #: ``Authentication-Results`` header. When set, only headers whose leading
-    #: authserv-id starts with this value are trusted; any other authserv-id
-    #: (e.g. a forged one carried inside the message body) is rejected as
-    #: all-fail. Set to ``None`` to disable pinning (not recommended).
+    #: authserv-id *exactly* equals this value are trusted; any other
+    #: authserv-id (e.g. a forged one carried inside the message body, or a
+    #: look-alike like ``mx.google.com.evil.com``) is rejected as all-fail.
+    #: Set to ``None`` to disable pinning (not recommended).
     #:
     #: Gmail's authserv-id is ``"mx.google.com"``, which is the default.
     trusted_authserv_id: str | None = field(default="mx.google.com")

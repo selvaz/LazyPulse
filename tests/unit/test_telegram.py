@@ -177,47 +177,70 @@ def test_policy_bot_sender_never_trusted() -> None:
 # --- Tools ------------------------------------------------------------- #
 
 
-def test_send_blocked_without_confirmation() -> None:
+async def test_send_blocked_without_confirmation() -> None:
     svc = FakeService([])
     with pytest.raises(TelegramSendBlocked, match="no outstanding confirmation"):
-        TelegramTools(svc)._send_message(chat_id=42, text="hi")
+        await TelegramTools(svc)._send_message(chat_id=42, text="hi")
     assert svc.sent == []
 
 
-def test_confirm_once_authorizes_exactly_one_send() -> None:
+async def test_confirm_once_authorizes_exactly_one_send() -> None:
     svc = FakeService([])
     tools = TelegramTools(svc)
     tools.confirm_once()
-    tools._send_message(chat_id=42, text="hi")
+    await tools._send_message(chat_id=42, text="hi")
     assert len(svc.sent) == 1
     with pytest.raises(TelegramSendBlocked):
-        tools._send_message(chat_id=42, text="again")
+        await tools._send_message(chat_id=42, text="again")
 
 
-def test_confirm_send_bound_to_chat() -> None:
+async def test_confirm_send_bound_to_chat() -> None:
     svc = FakeService([])
     tools = TelegramTools(svc)
     tools.confirm_send(chat_id=42)
     with pytest.raises(TelegramSendBlocked):
-        tools._send_message(chat_id=99, text="wrong chat")
-    tools._send_message(chat_id=42, text="ok")
+        await tools._send_message(chat_id=99, text="wrong chat")
+    await tools._send_message(chat_id=42, text="ok")
     assert len(svc.sent) == 1
 
 
-def test_allow_list_enforced() -> None:
+async def test_allow_list_enforced() -> None:
     svc = FakeService([])
     tools = TelegramTools(svc, allowed_chat_ids=[42])
     tools.confirm_once()
     with pytest.raises(TelegramSendBlocked, match="allow-list"):
-        tools._send_message(chat_id=99, text="blocked")
+        await tools._send_message(chat_id=99, text="blocked")
     assert svc.sent == []
 
 
-def test_require_confirmation_false_allows_reply() -> None:
+async def test_require_confirmation_false_allows_reply() -> None:
     # The chat-bot setup: reply freely to an allow-listed chat.
     svc = FakeService([])
     tools = TelegramTools(svc, allowed_chat_ids=[42], require_confirmation=False)
-    tools._send_message(chat_id=42, text="hi")
+    await tools._send_message(chat_id=42, text="hi")
+    assert len(svc.sent) == 1
+
+
+async def test_task_bound_grant_not_stolen_by_concurrent_task() -> None:
+    from lazypulse._context import active_task_id
+
+    svc = FakeService([])
+    tools = TelegramTools(svc)
+    tools.confirm_send(chat_id=42, task_id="TASK-A")
+    # Task B cannot consume task A's grant.
+    token = active_task_id.set("TASK-B")
+    try:
+        with pytest.raises(TelegramSendBlocked):
+            await tools._send_message(chat_id=42, text="stolen?")
+    finally:
+        active_task_id.reset(token)
+    assert svc.sent == []
+    # Task A can.
+    token = active_task_id.set("TASK-A")
+    try:
+        await tools._send_message(chat_id=42, text="ok")
+    finally:
+        active_task_id.reset(token)
     assert len(svc.sent) == 1
 
 
@@ -281,3 +304,60 @@ async def test_rejected_message_never_replies() -> None:
     )
     await pulse.tick_once()
     assert svc.sent == []
+
+
+def _reply_record(chat_id: int = 42, *, is_bot: bool = False) -> Any:
+    from datetime import UTC, datetime
+
+    from lazypulse.models import PulseRecord
+
+    now = datetime.now(UTC)
+    return PulseRecord(
+        text="x",
+        created_at=now,
+        run_at=now,
+        source="telegram",
+        inbound_metadata={"chat_id": chat_id, "is_bot": is_bot},
+    )
+
+
+async def test_auto_reply_skips_bot_origin_by_default() -> None:
+    # Defence in depth against bot↔bot loops: the Responder path itself
+    # refuses to reply into a bot conversation, independent of the policy.
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    await inbox.reply(_reply_record(is_bot=True), "hi", store=Store(), session=None)
+    assert svc.sent == []
+    # Opt back in explicitly.
+    inbox_optin = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_to_bots=True))
+    await inbox_optin.reply(_reply_record(is_bot=True), "hi", store=Store(), session=None)
+    assert svc.sent == [{"chat_id": 42, "text": "hi"}]
+
+
+async def test_auto_reply_rate_limit_breaks_loop() -> None:
+    from datetime import UTC, datetime, timedelta
+
+    store = Store()
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0))
+    rec = _reply_record(chat_id=42)
+    await inbox.reply(rec, "first", store=store, session=None)
+    # A second reply within the window is dropped — the circuit breaker.
+    await inbox.reply(rec, "second", store=store, session=None)
+    assert svc.sent == [{"chat_id": 42, "text": "first"}]
+    # Age the watermark past the window → the next reply is allowed again.
+    key = store_keys.tg_reply_throttle_key(BOT, "42")
+    store.write(key, {"at": (datetime.now(UTC) - timedelta(seconds=120)).isoformat()})
+    await inbox.reply(rec, "third", store=store, session=None)
+    assert svc.sent == [{"chat_id": 42, "text": "first"}, {"chat_id": 42, "text": "third"}]
+
+
+async def test_rate_limit_disabled_by_default() -> None:
+    # With the default interval (0.0), consecutive replies are not throttled.
+    store = Store()
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    rec = _reply_record(chat_id=42)
+    await inbox.reply(rec, "a", store=store, session=None)
+    await inbox.reply(rec, "b", store=store, session=None)
+    assert [s["text"] for s in svc.sent] == ["a", "b"]

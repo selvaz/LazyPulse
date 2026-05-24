@@ -131,7 +131,9 @@ What happens each tick:
 4. `GmailTools.gmail_create_draft` works freely; `gmail_send` stays blocked
    until you grant a **one-shot** confirmation — `tools.confirm_send(to=addr)`
    (recipient-bound) or `tools.confirm_once()` — typically right after you
-   `approve_task(...)`. Each grant authorizes exactly one send.
+   `approve_task(...)`. Each grant authorizes exactly one send. Add
+   `task_id=rec.task_id` to bind the grant to that one task, so under
+   concurrent inbound it can't be consumed by a different task's send.
 
 ---
 

@@ -147,3 +147,25 @@ async def test_store_bound_at_construction_protects_before_first_drain() -> None
 
 def test_default_bind_host_is_loopback() -> None:
     assert WebhookAdapter().host == "127.0.0.1"
+
+
+async def test_buffer_full_returns_503() -> None:
+    adapter = WebhookAdapter(max_buffer_size=2)
+    async with _client(adapter) as client:
+        r1 = await client.post("/inbound", json={"message_id": "1", "text": "a"})
+        r2 = await client.post("/inbound", json={"message_id": "2", "text": "b"})
+        r3 = await client.post("/inbound", json={"message_id": "3", "text": "c"})
+    assert r1.status_code == 202
+    assert r2.status_code == 202
+    assert r3.status_code == 503
+
+
+async def test_seen_nonces_cleared_after_drain() -> None:
+    # Nonces received before first drain are held in _seen_nonces;
+    # after drain flushes them to the Store, the in-memory set is cleared.
+    adapter = WebhookAdapter()
+    async with _client(adapter) as client:
+        await client.post("/inbound", json={"message_id": "1", "text": "x", "nonce": "pre-drain"})
+    assert "pre-drain" in adapter._seen_nonces
+    await adapter.drain(store=Store(), session=None)
+    assert "pre-drain" not in adapter._seen_nonces

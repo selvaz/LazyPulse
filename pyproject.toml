@@ -10,7 +10,7 @@ readme = "README.md"
 license = { text = "Apache-2.0" }
 requires-python = ">=3.11"
 authors = [{ name = "selvaz" }]
-keywords = ["llm", "agents", "automation", "gmail", "webhook", "lazybridge", "human-in-the-loop"]
+keywords = ["llm", "agents", "automation", "gmail", "telegram", "webhook", "lazybridge", "human-in-the-loop"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
@@ -38,6 +38,9 @@ gmail = [
     "google-auth>=2.0,<3.0",
     "google-auth-oauthlib>=1.0,<2.0",
 ]
+# Telegram polling + send tool. Pulls only httpx for the Bot API HTTP calls;
+# kept optional so ``pip install lazypulse`` stays dependency-light.
+telegram = ["httpx>=0.27,<1.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",

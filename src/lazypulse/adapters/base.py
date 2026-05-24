@@ -17,7 +17,7 @@ from typing import TYPE_CHECKING, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from lazybridge import Session, Store
 
-    from lazypulse.models import InboundMessage
+    from lazypulse.models import InboundMessage, PulseRecord
 
 
 @runtime_checkable
@@ -27,12 +27,15 @@ class Adapter(Protocol):
     Implementations must set a ``name`` attribute (used in events and
     error reporting) and implement :meth:`drain`.
 
-    **drain() must be idempotent.** Calling it twice in quick succession
-    must not yield the same message twice — adapters that talk to an
-    at-least-once source (Gmail history, an HTTP queue) are responsible for
-    recording what they have already emitted (typically in the ``store``)
-    so a re-drain returns an empty list. The PulseAgent also dedupes on
-    ``message_id`` as a backstop, but adapters should not rely on it.
+    **drain() is at-least-once.** An adapter may re-emit a message until
+    the PulseAgent has durably recorded it (the central
+    ``store_keys.EVENT`` marker exists for that ``message_id``). This
+    makes crashes between drain and record-write safe: the next poll
+    re-emits and the message is recorded. The PulseAgent deduplicates on
+    ``message_id``, so a message still becomes at most one task. Adapters
+    that have their own delivered/acked state should honour it to avoid
+    unnecessary work, but correctness never depends on them being
+    idempotent.
     """
 
     name: str
@@ -43,3 +46,31 @@ class Adapter(Protocol):
         store: Store,
         session: Session | None,
     ) -> list[InboundMessage]: ...
+
+
+@runtime_checkable
+class Responder(Protocol):
+    """An adapter that can send a reply back to a message's origin.
+
+    Optional: implement it on an adapter for a *conversational* channel. When
+    a task completes, the PulseAgent routes the worker's ``worker_text`` back
+    to the originating conversation (e.g. the Telegram chat the message came
+    from) via :meth:`reply`.
+
+    Replying to the sender that was already authorized to reach the worker
+    needs **no extra confirmation** — it is a direct response to authorized
+    inbound, not an outbound send to a new recipient (which the tool layer
+    still gates). The reply is best-effort: a failure never un-completes the
+    task.
+    """
+
+    name: str
+
+    async def reply(
+        self,
+        record: PulseRecord,
+        text: str,
+        *,
+        store: Store,
+        session: Session | None,
+    ) -> None: ...

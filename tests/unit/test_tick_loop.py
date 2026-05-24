@@ -205,7 +205,7 @@ async def test_stale_running_record_recovered_and_rerun() -> None:
     )
     store.write(store_keys.task_key(stale.task_id), stale.model_dump(mode="json"))
     engine = MockEngine(["recovered-output"])
-    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock)
+    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock, stale_after=300)
 
     report = await pulse.tick_once()
     assert report.recovered == 1
@@ -228,7 +228,7 @@ async def test_stale_record_fails_after_max_restarts() -> None:
     )
     store.write(store_keys.task_key(exhausted.task_id), exhausted.model_dump(mode="json"))
     engine = MockEngine(["nope"])
-    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock)
+    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock, stale_after=300)
 
     await pulse.tick_once()
     rec = _records(store)[0]

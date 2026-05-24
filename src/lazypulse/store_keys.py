@@ -28,8 +28,15 @@ LAST_HISTORY = "pulse:gmail:last_history_id:{account}"
 #: Webhook replay protection.
 WEBHOOK_NONCE = "pulse:webhook:nonce:{nonce}"
 
+#: Telegram getUpdates offset watermark (per bot). The adapter advances this
+#: only past updates the PulseAgent has already recorded (at-least-once).
+TG_OFFSET = "pulse:telegram:offset:{bot}"
+
 #: Prefix used to enumerate every task record in the Store.
 TASK_PREFIX = "pulse:task:"
+
+#: Prefix used to enumerate pending review requests (derived from REVIEW_REQ).
+REVIEW_REQ_PREFIX = "pulse:review:req:"
 
 
 def task_key(task_id: str) -> str:

@@ -12,7 +12,7 @@ what the message says.
 |---|---|
 | Prompt injection ("ignore previous instructions…") | The policy classifies and authorizes by **sender identity**, never by message text. An unknown sender is rejected before the worker sees the text. `classify()` ignores the body entirely. |
 | Forgotten policy in production | A `PulseAgent` with adapters but no `policy=` **refuses to construct** (raises). Allow-all requires the explicit `unsafe_allow_all=True` opt-in, reserved for local dev. |
-| Spoofed owner address | `GmailPolicy` only grants `OWNER_VERIFIED_EMAIL` when the parsed sender address (display names stripped) is an owner **and** DKIM + DMARC pass. A missing `Authentication-Results` header can never be owner-verified. The header parser strips CFWS comments and anchors method tokens, so a `pass` buried in a comment or an `x-dkim=pass` extension can't spoof a result. |
+| Spoofed owner address | `GmailPolicy` only grants `OWNER_VERIFIED_EMAIL` when the parsed sender address (display names stripped) is an owner **and** DKIM + DMARC pass. A missing `Authentication-Results` header can never be owner-verified. Three defences guard the parser: (1) **authserv-id pinning** — only the header whose leading authserv-id starts with `trusted_authserv_id` (default `"mx.google.com"`) is parsed; a forged header with any other authserv-id is rejected outright; (2) **first-wins header selection** — `GmailInbox` keeps only the first `Authentication-Results` header, which is the one Gmail prepends (RFC 8601 §5.7); a forged copy carried inside the message body appears later and is silently discarded; (3) **comment stripping + token anchoring** — a `pass` inside an RFC comment or an `x-dkim=pass` extension field cannot spoof a result. |
 | Unauthorized external send | `EXTERNAL_SEND` / `DESTRUCTIVE` from a verified owner returns `REQUIRE_OWNER_CONFIRMATION` → the task parks in `awaiting_review`, never auto-runs until a human calls `approve_task`. `GmailTools.gmail_send` is independently gated on explicit confirmation + a recipient allow-list. |
 | Replay of a captured webhook | Optional HMAC-SHA256 body signing, plus nonce tracking that consults the Store (409 on a repeat) so protection survives a restart. |
 | Duplicate / re-delivered message | Deduped centrally on `message_id` via the EVENT marker. Adapters are at-least-once (they may re-emit until the task is recorded); a message still becomes at most one task. |
@@ -54,10 +54,20 @@ can be called. So:
   for any tool that sends, pays, deletes, or executes. The `ActionClass` on a
   message expresses *intent*; it does not automatically constrain tool calls.
 - **Authentication parsing is a conservative MVP.** `GmailPolicy` reads
-  Gmail's own `Authentication-Results` header (which Gmail adds after
-  stripping inbound copies). It is hardened against comment/extension-field
-  spoofing but is not a full multi-hop email-auth verifier — for that,
+  the first `Authentication-Results` header (prepended by Gmail, authserv-id
+  `mx.google.com`). Gmail strips inbound copies that *claim its own*
+  authserv-id (RFC 8601 §5.7), but headers with a different authserv-id can
+  survive forwarding — `GmailInbox` pins the authserv-id and uses first-wins
+  selection to reject them. For full multi-hop email-auth verification,
   validate upstream and pass the result in `metadata`.
+- **Chat platforms are authenticated for you.** `TelegramPolicy` keys on the
+  numeric `message.from.id`, which Telegram verifies server-side and a sender
+  cannot spoof — a stronger, simpler signal than email (no header to forge).
+  `TelegramPolicy` also rejects bot accounts. The same shape applies to any
+  platform-authenticated channel: classify on the verified user id, not on
+  any field the sender can set. When intaking over a webhook, still verify the
+  platform's signature (Slack signing secret, Telegram secret token, Discord
+  Ed25519) the way `WebhookAdapter` checks its HMAC.
 
 ## Operational notes
 

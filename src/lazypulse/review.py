@@ -62,7 +62,7 @@ class StoreReviewerUI:
 def pending_reviews(store: Store) -> list[dict[str, Any]]:
     """Return every review request that has no response yet."""
     out: list[dict[str, Any]] = []
-    prefix = "pulse:review:req:"
+    prefix = store_keys.REVIEW_REQ_PREFIX
     for key in list(store.keys()):
         if not key.startswith(prefix):
             continue

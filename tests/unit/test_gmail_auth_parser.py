@@ -66,3 +66,44 @@ def test_extension_field_does_not_impersonate_method() -> None:
 
 def test_method_at_start_of_value_matches() -> None:
     assert parse_authentication_results("dkim=pass; spf=pass; dmarc=pass")["dkim"] is True
+
+
+# ------------------------------------------------------------------ #
+# Authserv-id pinning
+# ------------------------------------------------------------------ #
+
+
+def test_authserv_id_pinning_accepts_matching_id() -> None:
+    header = "mx.google.com; dkim=pass; spf=pass; dmarc=pass"
+    result = parse_authentication_results(header, trusted_authserv_id="mx.google.com")
+    assert result == {"dkim": True, "spf": True, "dmarc": True}
+
+
+def test_authserv_id_pinning_rejects_foreign_id() -> None:
+    # A forged header from a different relay must not count as pass.
+    header = "attacker-relay.test; dkim=pass; spf=pass; dmarc=pass"
+    result = parse_authentication_results(header, trusted_authserv_id="mx.google.com")
+    assert result == {"dkim": False, "spf": False, "dmarc": False}
+
+
+def test_authserv_id_pinning_rejects_no_id() -> None:
+    # A header with no authserv-id is also rejected when pinning is active.
+    header = "dkim=pass; spf=pass; dmarc=pass"
+    result = parse_authentication_results(header, trusted_authserv_id="mx.google.com")
+    assert result == {"dkim": False, "spf": False, "dmarc": False}
+
+
+def test_no_pinning_accepts_any_authserv_id() -> None:
+    # Without trusted_authserv_id, backward-compat: any (or no) authserv-id works.
+    assert parse_authentication_results("dkim=pass; spf=pass; dmarc=pass")["dkim"] is True
+    assert parse_authentication_results("attacker.test; dkim=pass; spf=pass; dmarc=pass")["dkim"] is True
+
+
+def test_authserv_id_prefix_match() -> None:
+    # mx.google.com covers subdomain variants like mx.google.com (exact) only.
+    header = "mx.google.com; dkim=pass; dmarc=pass"
+    assert parse_authentication_results(header, trusted_authserv_id="mx.google.com")["dkim"] is True
+    # A superset prefix e.g. "mx" must NOT match "mx.google.com" in reverse.
+    header2 = "evil-mx.google.com; dkim=pass; dmarc=pass"
+    # "evil-mx.google.com" does not start with "mx.google.com"
+    assert parse_authentication_results(header2, trusted_authserv_id="mx.google.com")["dkim"] is False

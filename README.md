@@ -27,6 +27,7 @@ loop**, a **trust policy**, and **inbound adapters**.
 pip install lazypulse                # core
 pip install 'lazypulse[webhook]'     # + HTTP intake
 pip install 'lazypulse[gmail]'       # + Gmail polling & draft/send
+pip install 'lazypulse[telegram]'    # + Telegram polling & send
 pip install 'lazypulse[dev]'         # test + lint toolchain
 ```
 
@@ -120,9 +121,13 @@ What happens each tick:
    carrying its DKIM/SPF/DMARC result).
 2. `GmailPolicy` classifies the sender. Mail from `OWNER` that passes DKIM +
    DMARC is `OWNER_VERIFIED_EMAIL`; a spoof or stranger is not.
-3. The matrix decides: owner reading/drafting → **runs**; owner asking to
-   *send* externally → **queued for your confirmation**; everyone else →
-   **rejected** before the model ever sees the text.
+3. The matrix decides: owner mail (default `READ_PUBLIC` intent) → **runs**;
+   everyone else → **rejected** before the model ever sees the text. If you
+   want the *policy* itself to gate risky actions before the worker runs,
+   set `default_action=ActionClass.EXTERNAL_SEND` in `GmailInboxConfig` —
+   then owner external-send requests park in `awaiting_review` until
+   confirmed. With the default action class the send gate lives at the tool
+   layer (step 4), which is equally effective.
 4. `GmailTools.gmail_create_draft` works freely; `gmail_send` stays blocked
    until you grant a **one-shot** confirmation — `tools.confirm_send(to=addr)`
    (recipient-bound) or `tools.confirm_once()` — typically right after you
@@ -238,7 +243,22 @@ An adapter is **at-least-once**: dedupe is central, on `message_id`, so it's
 fine (preferable, even) to re-emit a message until LazyPulse has durably
 recorded it — that's what makes a crash between drain and record-write safe.
 A message still becomes at most one task. Built-in adapters: `WebhookAdapter`,
-`GmailInbox`.
+`GmailInbox`, `TelegramInbox`.
+
+Chat platforms make the policy *simpler and stronger* than email:
+`TelegramInbox` carries the platform-authenticated sender id, which can't be
+spoofed, so `TelegramPolicy` keys on `owner_ids=[...]` directly — no
+DKIM/DMARC parsing. A bot or a stranger is rejected before the worker runs.
+
+### Talking back — conversational adapters
+
+An adapter can also implement `reply()` (the `Responder` protocol). When a
+task completes, the PulseAgent sends the worker's output straight back to the
+conversation it came from — so `TelegramInbox` is a **two-way** channel out of
+the box: message the bot, get the agent's answer back, no tool wiring. Because
+the reply goes to the *already-authorized* sender, it needs no confirmation;
+sending to a *new* recipient still goes through a gated tool (`TelegramTools`,
+`GmailTools`). Turn auto-reply off with `TelegramInboxConfig(reply_with_output=False)`.
 
 ### PulseRecord — the task ledger
 
@@ -323,6 +343,7 @@ Runnable files in [`examples/`](examples/) (01, 05, 06 need no credentials):
 | `04_store_review_thin_client.py` | a reviewer CLI |
 | `05_plan_routing_deterministico.py` | route by category with a `Plan` engine |
 | `06_multi_pulse_shared_store.py` | two agents, one Store, no double-runs |
+| `07_telegram_polling.py` | watch a Telegram bot, reply only to the owner |
 
 ## Docs
 

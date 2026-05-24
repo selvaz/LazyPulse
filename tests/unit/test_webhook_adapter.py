@@ -128,5 +128,22 @@ async def test_nonce_replay_rejected_across_restart() -> None:
     assert resp.status_code == 409
 
 
+async def test_store_bound_at_construction_protects_before_first_drain() -> None:
+    # Two adapters sharing a store= bound up front: the second rejects a nonce
+    # the first saw, with no drain ever called (closes the first-drain gap).
+    store = Store()
+    a1 = WebhookAdapter(store=store)
+    t1 = httpx.ASGITransport(app=a1.asgi_app())
+    async with httpx.AsyncClient(transport=t1, base_url="http://t") as c:
+        first = await c.post("/inbound", json={"message_id": "1", "text": "x", "nonce": "n"})
+    assert first.status_code == 202
+
+    a2 = WebhookAdapter(store=store)
+    t2 = httpx.ASGITransport(app=a2.asgi_app())
+    async with httpx.AsyncClient(transport=t2, base_url="http://t") as c:
+        second = await c.post("/inbound", json={"message_id": "2", "text": "y", "nonce": "n"})
+    assert second.status_code == 409
+
+
 def test_default_bind_host_is_loopback() -> None:
     assert WebhookAdapter().host == "127.0.0.1"

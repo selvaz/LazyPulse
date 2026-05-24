@@ -50,23 +50,42 @@ def test_create_draft_is_not_blocked() -> None:
 def test_send_without_confirmation_blocked() -> None:
     svc = FakeService()
     provider, _ = _tools(svc)
-    with pytest.raises(GmailSendBlocked, match="not been confirmed"):
+    with pytest.raises(GmailSendBlocked, match="no outstanding confirmation"):
         provider._send(to="a@x.com", subject="hi", body="b")
     assert svc.sent == []
 
 
-def test_send_after_confirmation_succeeds() -> None:
+def test_confirm_once_authorizes_exactly_one_send() -> None:
     svc = FakeService()
     provider, _ = _tools(svc)
-    provider.confirm()
-    out = provider._send(to="a@x.com", subject="hi", body="b")
-    assert "sent" in out
+    provider.confirm_once()
+    provider._send(to="a@x.com", subject="hi", body="b")
     assert len(svc.sent) == 1
+    # The single grant is now spent — a second send is blocked.
+    with pytest.raises(GmailSendBlocked):
+        provider._send(to="a@x.com", subject="hi", body="b")
+    assert len(svc.sent) == 1
+
+
+def test_confirm_send_is_bound_to_recipient() -> None:
+    svc = FakeService()
+    provider, _ = _tools(svc)
+    provider.confirm_send(to="alice@x.com")
+    # A grant for alice does not authorize a send to bob.
+    with pytest.raises(GmailSendBlocked):
+        provider._send(to="bob@x.com", subject="hi", body="b")
+    assert svc.sent == []
+    # ...but it does authorize exactly one send to alice.
+    provider._send(to="alice@x.com", subject="hi", body="b")
+    assert len(svc.sent) == 1
+    with pytest.raises(GmailSendBlocked):
+        provider._send(to="alice@x.com", subject="hi", body="b")
 
 
 def test_send_respects_recipient_allowlist() -> None:
     svc = FakeService()
-    provider, _ = _tools(svc, allowed_recipients=["ok@x.com"], confirmed=True)
+    provider, _ = _tools(svc, allowed_recipients=["ok@x.com"])
+    provider.confirm_once()
     with pytest.raises(GmailSendBlocked, match="allow-list"):
         provider._send(to="evil@y.com", subject="hi", body="b")
     assert svc.sent == []
@@ -74,7 +93,8 @@ def test_send_respects_recipient_allowlist() -> None:
 
 def test_send_to_allowed_recipient_succeeds() -> None:
     svc = FakeService()
-    provider, _ = _tools(svc, allowed_recipients=["ok@x.com"], confirmed=True)
+    provider, _ = _tools(svc, allowed_recipients=["ok@x.com"])
+    provider.confirm_send(to="ok@x.com")
     provider._send(to="ok@x.com", subject="hi", body="b")
     assert len(svc.sent) == 1
 

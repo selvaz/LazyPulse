@@ -11,8 +11,10 @@ Security posture:
   wrong signatures are rejected with ``401``.
 * **Replay protection** — a request may carry a ``nonce``; a nonce seen
   before is rejected with ``409``. Seen nonces are persisted to the Store
-  (under ``store_keys.WEBHOOK_NONCE``) on each drain so protection survives
-  across restarts and is shared between processes on one Store.
+  (under ``store_keys.WEBHOOK_NONCE``) so protection survives across restarts
+  and is shared between processes on one Store. Pass ``store=`` to the
+  constructor to enable this from the very first request; otherwise the Store
+  is bound on the first ``drain`` and the in-memory set covers the gap.
 * **Bind host** — :meth:`serve` binds ``127.0.0.1`` by default; expose it
   behind a reverse proxy rather than binding ``0.0.0.0`` directly.
 
@@ -51,6 +53,7 @@ class WebhookAdapter:
         host: str = "127.0.0.1",
         port: int = 8099,
         path: str = "/inbound",
+        store: Store | None = None,
     ) -> None:
         self.name = name
         self.shared_secret = shared_secret
@@ -60,10 +63,10 @@ class WebhookAdapter:
         self._buffer: list[InboundMessage] = []
         self._seen_nonces: set[str] = set()
         self._pending_nonces: set[str] = set()
-        # Bound on the first drain so the request handler can consult the Store
-        # for replay protection that outlives the process (the in-memory set is
-        # empty after a restart).
-        self._store: Store | None = None
+        # Bound on the first drain (or up front via store=) so the request
+        # handler can consult the Store for replay protection that outlives the
+        # process. Passing store= here closes the gap before the first drain.
+        self._store: Store | None = store
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #

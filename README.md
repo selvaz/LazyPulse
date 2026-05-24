@@ -134,7 +134,9 @@ What happens each tick:
    *send* externally → **queued for your confirmation**; everyone else →
    **rejected** before the model ever sees the text.
 4. `GmailTools.gmail_create_draft` works freely; `gmail_send` stays blocked
-   until you confirm.
+   until you grant a **one-shot** confirmation — `tools.confirm_send(to=addr)`
+   (recipient-bound) or `tools.confirm_once()` — typically right after you
+   `approve_task(...)`. Each grant authorizes exactly one send.
 
 ---
 

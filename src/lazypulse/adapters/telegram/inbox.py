@@ -47,6 +47,18 @@ class TelegramInboxConfig:
     #: no extra wiring. Set False for a fire-and-forget / triage bot that
     #: should not reply.
     reply_with_output: bool = True
+    #: When False (default), the auto-reply path never sends into a chat whose
+    #: originating message came from a bot account. ``TelegramPolicy`` already
+    #: rejects bot senders at intake, so this is defence-in-depth that keeps
+    #: the Responder path self-protecting regardless of the policy in use —
+    #: the main guard against bot↔bot reply loops.
+    reply_to_bots: bool = False
+    #: Minimum seconds between consecutive auto-replies into the *same* chat.
+    #: ``0.0`` (default) disables throttling. When set, a reply that would fire
+    #: within the window of the previous one is dropped — a circuit breaker
+    #: against runaway reply amplification. The watermark is kept in the Store
+    #: (per bot + chat) so it holds across ticks, restarts, and processes.
+    reply_min_interval_seconds: float = 0.0
 
 
 class TelegramInbox:
@@ -110,13 +122,42 @@ class TelegramInbox:
         protocol, so a ``PulseAgent`` calls it automatically when a Telegram-
         sourced task completes. Replying to the original (already-authorized)
         chat needs no confirmation — unlike :class:`TelegramTools`, which can
-        target arbitrary chats and stays gated."""
+        target arbitrary chats and stays gated.
+
+        Two circuit breakers guard against reply loops / amplification:
+        ``reply_to_bots`` (skip replying into a bot conversation) and
+        ``reply_min_interval_seconds`` (per-chat rate limit)."""
+        meta = record.inbound_metadata or {}
         if not self._config.reply_with_output:
             return
-        chat_id = (record.inbound_metadata or {}).get("chat_id")
+        if not self._config.reply_to_bots and meta.get("is_bot"):
+            return  # defence in depth: never auto-reply into a bot conversation
+        chat_id = meta.get("chat_id")
         if chat_id is None or not text:
             return
+        if not self._reply_allowed_now(chat_id, store):
+            return  # within the per-chat throttle window — break the loop
         self._client.send_message(chat_id=chat_id, text=text)
+
+    def _reply_allowed_now(self, chat_id: Any, store: Store) -> bool:
+        """Enforce the per-chat auto-reply rate limit. Returns ``False`` (and
+        records nothing) when a reply would fire within
+        ``reply_min_interval_seconds`` of the previous one to this chat."""
+        interval = self._config.reply_min_interval_seconds
+        if interval <= 0:
+            return True
+        key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
+        now = datetime.now(UTC)
+        last = store.read(key)
+        if isinstance(last, dict) and isinstance(last.get("at"), str):
+            try:
+                last_at = datetime.fromisoformat(last["at"])
+            except ValueError:
+                last_at = None
+            if last_at is not None and (now - last_at).total_seconds() < interval:
+                return False
+        store.write(key, {"at": now.isoformat()})
+        return True
 
     def _to_inbound(self, event_id: str, msg: dict[str, Any]) -> InboundMessage:
         frm = msg.get("from") or {}

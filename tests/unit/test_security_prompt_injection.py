@@ -94,7 +94,7 @@ async def test_owner_destructive_requires_confirmation() -> None:
     assert _records(store)[0].decision == "require_owner_confirmation"
 
 
-def test_gmail_send_tool_blocked_until_confirmed() -> None:
+async def test_gmail_send_tool_blocked_until_confirmed() -> None:
     class FakeSvc:
         def send_message(self, **kw):  # pragma: no cover - shouldn't be reached
             raise AssertionError("send must not reach the API while blocked")
@@ -103,7 +103,7 @@ def test_gmail_send_tool_blocked_until_confirmed() -> None:
 
     tools = GmailTools(FakeSvc())
     with pytest.raises(GmailSendBlocked):
-        tools._send(to="bob@x.com", subject="hi", body="b")
+        await tools._send(to="bob@x.com", subject="hi", body="b")
 
 
 async def test_unknown_sender_read_public_still_rejected() -> None:

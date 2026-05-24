@@ -10,11 +10,14 @@ Three hardening rules guard against forged "pass" tokens:
 
 1. **Authserv-id pinning.** When ``trusted_authserv_id`` is set, only
    headers whose leading authserv-id (the hostname before the first ``;``)
-   starts with that value are parsed. Gmail prepends its own
+   *exactly* equals that value are parsed. Gmail prepends its own
    ``Authentication-Results: mx.google.com; …`` header and, per RFC 8601
    §5.7, strips any inbound copy claiming its own authserv-id. A forged
    header carried inside the message body must therefore use a *different*
-   authserv-id — and is rejected outright when pinning is active.
+   authserv-id — and is rejected outright when pinning is active. The match
+   is exact (not a prefix) so a look-alike id such as
+   ``mx.google.com.evil.com`` — which *starts with* the trusted value — is
+   rejected.
 2. **Comments are stripped first.** RFC 8601 headers carry CFWS comments and
    reason strings, e.g. ``spf=fail (sender note: spf=pass)``. Without
    stripping, the ``spf=pass`` inside the comment would be read as a result.
@@ -66,11 +69,13 @@ def parse_authentication_results(
     A missing or empty header yields all-``False``.
 
     When ``trusted_authserv_id`` is set (e.g. ``"mx.google.com"``), the
-    header is accepted **only** if its leading authserv-id starts with that
+    header is accepted **only** if its leading authserv-id is *exactly* that
     value. A forged header with a different authserv-id (or no authserv-id at
-    all) is rejected as all-``False``. The caller is responsible for passing
-    the first / top-most ``Authentication-Results`` header from the message —
-    the one prepended by the receiving MTA — rather than a later one.
+    all) is rejected as all-``False``. The match is exact rather than a
+    prefix, so neither ``evil-mx.google.com`` nor ``mx.google.com.evil.com``
+    is accepted. The caller is responsible for passing the first / top-most
+    ``Authentication-Results`` header from the message — the one prepended by
+    the receiving MTA — rather than a later one.
     """
     result = {m: False for m in _METHODS}
     if not header:
@@ -78,8 +83,8 @@ def parse_authentication_results(
 
     if trusted_authserv_id is not None:
         authserv_id = _extract_authserv_id(header)
-        if authserv_id is None or not authserv_id.startswith(trusted_authserv_id.lower()):
-            return result  # authserv-id absent or does not match: reject
+        if authserv_id != trusted_authserv_id.lower():
+            return result  # authserv-id absent or does not match exactly: reject
 
     # Collapse comments (a few passes handles the rare nested case).
     cleaned = header

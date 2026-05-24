@@ -62,6 +62,19 @@ def test_no_adapters_no_policy_is_fine() -> None:
     PulseAgent(name="pulse", engine=MockEngine(), store=Store())
 
 
+def test_duplicate_adapter_names_rejected() -> None:
+    # Reply routing keys on the adapter name, so two adapters sharing a name
+    # would silently send a completed task's reply through the wrong client.
+    with pytest.raises(ValueError, match="share name"):
+        PulseAgent(
+            name="pulse",
+            engine=MockEngine(),
+            store=Store(),
+            unsafe_allow_all=True,
+            adapters=[MockAdapter([], name="dup"), MockAdapter([], name="dup")],
+        )
+
+
 def test_max_concurrent_configured() -> None:
     a = PulseAgent(name="a", engine=MockEngine(), store=Store(), max_concurrent_inbound=2)
     b = PulseAgent(name="b", engine=MockEngine(), store=Store(), max_concurrent_inbound=5)
@@ -187,13 +200,13 @@ def test_one_shot_tick_is_synchronous() -> None:
 async def test_idempotent_message_not_run_twice() -> None:
     store = Store()
     engine = MockEngine(["done"])
-    # Two adapters emitting the SAME message id → one task only.
+    # Two (distinctly named) adapters emitting the SAME message id → one task.
     pulse = PulseAgent(
         unsafe_allow_all=True,
         name="pulse",
         engine=engine,
         store=store,
-        adapters=[MockAdapter([_msg("dup")]), MockAdapter([_msg("dup")])],
+        adapters=[MockAdapter([_msg("dup")], name="a"), MockAdapter([_msg("dup")], name="b")],
     )
     await pulse.tick_once()
     recs = [k for k in list(store.keys()) if k.startswith(store_keys.TASK_PREFIX)]

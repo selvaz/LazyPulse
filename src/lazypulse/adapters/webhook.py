@@ -130,26 +130,6 @@ class WebhookAdapter:
         if not message_id or not isinstance(text, str):
             return JSONResponse({"error": "message_id and text are required"}, status_code=400)
 
-        nonce = data.get("nonce")
-        if nonce is not None:
-            nonce_key = store_keys.WEBHOOK_NONCE.format(nonce=nonce)
-            async with self._lock:
-                if self._store is not None:
-                    # Store is bound: use it as the canonical nonce record.
-                    # Do NOT also add to _seen_nonces — the Store is durable
-                    # and _seen_nonces would grow unboundedly if we did.
-                    if self._store.read(nonce_key) is not None:
-                        return JSONResponse({"error": "replay detected"}, status_code=409)
-                    self._store.write(nonce_key, {"seen_at": _now_iso()})
-                else:
-                    # Store not bound yet (no drain has run): use in-memory
-                    # set as a fallback. These are flushed to the Store and
-                    # cleared from _seen_nonces on the first drain.
-                    if nonce in self._seen_nonces:
-                        return JSONResponse({"error": "replay detected"}, status_code=409)
-                    self._seen_nonces.add(nonce)
-                    self._pending_nonces.add(nonce)
-
         action = _parse_action(data.get("requested_action"))
         message = InboundMessage(
             source=self.name,
@@ -160,10 +140,36 @@ class WebhookAdapter:
             requested_action=action,
             metadata=data.get("metadata") or {},
         )
+
+        nonce = data.get("nonce")
         async with self._lock:
+            # Replay check (read-only) before anything is mutated.
+            if nonce is not None:
+                nonce_key = store_keys.WEBHOOK_NONCE.format(nonce=nonce)
+                seen = self._store.read(nonce_key) is not None if self._store is not None else nonce in self._seen_nonces
+                if seen:
+                    return JSONResponse({"error": "replay detected"}, status_code=409)
+            # Capacity check *before* burning the nonce: a full buffer is a
+            # retryable 503, so the nonce must stay unused — otherwise a retry
+            # with the same nonce would be rejected as a replay (409) and the
+            # message could never be accepted.
             if len(self._buffer) >= self._max_buffer_size:
                 return JSONResponse({"error": "buffer full"}, status_code=503)
             self._buffer.append(message)
+            # Only now burn the nonce — the message is durably queued.
+            if nonce is not None:
+                nonce_key = store_keys.WEBHOOK_NONCE.format(nonce=nonce)
+                if self._store is not None:
+                    # Store is bound: use it as the canonical nonce record. Do
+                    # NOT also add to _seen_nonces — the Store is durable and
+                    # _seen_nonces would grow unboundedly if we did.
+                    self._store.write(nonce_key, {"seen_at": _now_iso()})
+                else:
+                    # Store not bound yet (no drain has run): use the in-memory
+                    # set as a fallback. These are flushed to the Store and
+                    # cleared from _seen_nonces on the first drain.
+                    self._seen_nonces.add(nonce)
+                    self._pending_nonces.add(nonce)
         return JSONResponse({"status": "queued", "message_id": message.message_id}, status_code=202)
 
     def _valid_signature(self, raw: bytes, provided: str) -> bool:

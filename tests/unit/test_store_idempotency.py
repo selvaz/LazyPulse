@@ -50,7 +50,7 @@ async def test_duplicate_id_across_two_adapters_makes_one_task() -> None:
         engine=engine,
         store=store,
         clock=FakeClock(),
-        adapters=[MockAdapter([_msg("dup")]), MockAdapter([_msg("dup")])],
+        adapters=[MockAdapter([_msg("dup")], name="a"), MockAdapter([_msg("dup")], name="b")],
         unsafe_allow_all=True,
     )
     report = await pulse.tick_once()

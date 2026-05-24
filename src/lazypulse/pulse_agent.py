@@ -30,6 +30,7 @@ from typing import TYPE_CHECKING, Any, cast
 from lazybridge import Agent
 
 from lazypulse import store_keys
+from lazypulse._context import active_task_id
 from lazypulse.adapters.base import Responder
 from lazypulse.models import (
     ActionClass,
@@ -82,10 +83,20 @@ class PulseAgent(Agent):
             )
         self._adapters: list[Adapter] = list(adapters or [])
         # Name → adapter, for routing a completed task's reply back to its
-        # source (see ``_maybe_reply``).
-        self._adapters_by_name: dict[str, Adapter] = {
-            getattr(a, "name", repr(a)): a for a in self._adapters
-        }
+        # source (see ``_maybe_reply``). Names must be unique: a reply is
+        # routed by the source name recorded on the task, so two adapters
+        # sharing a name (e.g. two default-named ``TelegramInbox``es) would
+        # silently send replies through the wrong client. Fail fast instead.
+        self._adapters_by_name: dict[str, Adapter] = {}
+        for adapter in self._adapters:
+            name = getattr(adapter, "name", repr(adapter))
+            if name in self._adapters_by_name:
+                raise ValueError(
+                    f"Two adapters share name={name!r}. Adapter names must be unique so a "
+                    "completed task's reply routes back to the adapter it came from. Pass a "
+                    "distinct name= to each (e.g. TelegramInbox(client, cfg, name='telegram-2'))."
+                )
+            self._adapters_by_name[name] = adapter
         self._policy = policy
         self._unsafe_allow_all = unsafe_allow_all
         # Safety gate: a PulseAgent ingesting from external adapters with no
@@ -430,6 +441,12 @@ class PulseAgent(Agent):
         if not self.store.compare_and_swap(key, expected, running_dict):
             return None  # lost the race — someone else owns this task
 
+        # Expose the task id to the worker's tools for the duration of the run
+        # so a gated send tool can bind its one-shot grant to *this* task and
+        # not be consumed by a concurrent one. Reset afterwards; each _run_one
+        # already runs in its own copied context (gathered task), so this is
+        # task-isolated regardless.
+        token = active_task_id.set(started.task_id)
         try:
             env = await self.run(started.text)
         except Exception as exc:
@@ -438,6 +455,8 @@ class PulseAgent(Agent):
             )
         else:
             final = _finalize(started, env, self._clock())
+        finally:
+            active_task_id.reset(token)
 
         if not self.store.compare_and_swap(key, running_dict, final.model_dump(mode="json")):
             # Recovery (or another process) took the record over while we

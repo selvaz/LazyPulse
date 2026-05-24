@@ -18,9 +18,10 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
+from lazytools.connectors.gmail.auth import parse_authentication_results
+from lazytools.connectors.gmail.client import GmailService
+
 from lazypulse import store_keys
-from lazypulse.adapters.gmail.auth import parse_authentication_results
-from lazypulse.adapters.gmail.client import GmailService
 from lazypulse.models import ActionClass, InboundMessage
 
 if TYPE_CHECKING:

@@ -4,13 +4,11 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
 from lazybridge import Store
 
 from lazypulse import store_keys
 from lazypulse.adapters.telegram.inbox import TelegramInbox, TelegramInboxConfig
 from lazypulse.adapters.telegram.policy import TelegramPolicy
-from lazypulse.adapters.telegram.tools import TelegramSendBlocked, TelegramTools
 from lazypulse.models import ActionClass, TrustLevel
 
 BOT = "testbot"
@@ -174,74 +172,9 @@ def test_policy_bot_sender_never_trusted() -> None:
     assert TelegramPolicy(owner_ids=[42]).classify(msg).trust == TrustLevel.UNKNOWN
 
 
-# --- Tools ------------------------------------------------------------- #
-
-
-async def test_send_blocked_without_confirmation() -> None:
-    svc = FakeService([])
-    with pytest.raises(TelegramSendBlocked, match="no outstanding confirmation"):
-        await TelegramTools(svc)._send_message(chat_id=42, text="hi")
-    assert svc.sent == []
-
-
-async def test_confirm_once_authorizes_exactly_one_send() -> None:
-    svc = FakeService([])
-    tools = TelegramTools(svc)
-    tools.confirm_once()
-    await tools._send_message(chat_id=42, text="hi")
-    assert len(svc.sent) == 1
-    with pytest.raises(TelegramSendBlocked):
-        await tools._send_message(chat_id=42, text="again")
-
-
-async def test_confirm_send_bound_to_chat() -> None:
-    svc = FakeService([])
-    tools = TelegramTools(svc)
-    tools.confirm_send(chat_id=42)
-    with pytest.raises(TelegramSendBlocked):
-        await tools._send_message(chat_id=99, text="wrong chat")
-    await tools._send_message(chat_id=42, text="ok")
-    assert len(svc.sent) == 1
-
-
-async def test_allow_list_enforced() -> None:
-    svc = FakeService([])
-    tools = TelegramTools(svc, allowed_chat_ids=[42])
-    tools.confirm_once()
-    with pytest.raises(TelegramSendBlocked, match="allow-list"):
-        await tools._send_message(chat_id=99, text="blocked")
-    assert svc.sent == []
-
-
-async def test_require_confirmation_false_allows_reply() -> None:
-    # The chat-bot setup: reply freely to an allow-listed chat.
-    svc = FakeService([])
-    tools = TelegramTools(svc, allowed_chat_ids=[42], require_confirmation=False)
-    await tools._send_message(chat_id=42, text="hi")
-    assert len(svc.sent) == 1
-
-
-async def test_task_bound_grant_not_stolen_by_concurrent_task() -> None:
-    from lazypulse._context import active_task_id
-
-    svc = FakeService([])
-    tools = TelegramTools(svc)
-    tools.confirm_send(chat_id=42, task_id="TASK-A")
-    # Task B cannot consume task A's grant.
-    token = active_task_id.set("TASK-B")
-    try:
-        with pytest.raises(TelegramSendBlocked):
-            await tools._send_message(chat_id=42, text="stolen?")
-    finally:
-        active_task_id.reset(token)
-    assert svc.sent == []
-    # Task A can.
-    token = active_task_id.set("TASK-A")
-    try:
-        await tools._send_message(chat_id=42, text="ok")
-    finally:
-        active_task_id.reset(token)
-    assert len(svc.sent) == 1
+# NOTE: TelegramTools unit tests (allow-list + one-shot confirmation + scope
+# binding) moved to lazytools/tests/test_telegram_tools.py with the tool itself
+# (lazytoolkit, 0.8). The inbox/policy/auto-reply tests below stay here.
 
 
 # --- Conversational auto-reply (Responder) ----------------------------- #

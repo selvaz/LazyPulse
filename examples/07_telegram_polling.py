@@ -25,14 +25,10 @@ from __future__ import annotations
 import os
 
 from lazybridge import LLMEngine, Store
+from lazytools.connectors.telegram import TelegramClient
 
 from lazypulse import PulseAgent
-from lazypulse.adapters.telegram import (
-    TelegramClient,
-    TelegramInbox,
-    TelegramInboxConfig,
-    TelegramPolicy,
-)
+from lazypulse.adapters.telegram import TelegramInbox, TelegramInboxConfig, TelegramPolicy
 
 TOKEN = os.environ["TELEGRAM_TOKEN"]
 OWNER_ID = 123456789  # <-- your numeric Telegram user id
@@ -54,7 +50,7 @@ pulse = PulseAgent(
 # Want the agent to also message *other* chats (not just reply to the sender)?
 # Add a gated send tool — it stays confirmation-bound so it can't spam:
 #
-#   from lazypulse.adapters.telegram import TelegramTools
+#   from lazytools.connectors.telegram import TelegramTools
 #   tools=[TelegramTools(client, allowed_chat_ids=[OWNER_ID])]
 
 if __name__ == "__main__":

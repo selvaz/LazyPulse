@@ -6,10 +6,10 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from lazybridge import Store
+from lazytools.connectors.gmail import GmailSendBlocked, GmailTools
 
 from lazypulse import InboundMessage, PulseAgent, store_keys
 from lazypulse.adapters.gmail.policy import GmailPolicy
-from lazypulse.adapters.gmail.tools import GmailSendBlocked, GmailTools
 from lazypulse.models import PulseRecord, TrustLevel
 from lazypulse.testing import FakeClock, MockAdapter, MockEngine
 

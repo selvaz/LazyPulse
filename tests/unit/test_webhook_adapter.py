@@ -110,5 +110,23 @@ async def test_nonce_persisted_to_store_on_drain() -> None:
     assert store.read(store_keys.WEBHOOK_NONCE.format(nonce="abc")) is not None
 
 
+async def test_nonce_replay_rejected_across_restart() -> None:
+    # Simulate a process restart: a fresh adapter (empty in-memory set) bound
+    # to the SAME persistent Store must still reject a nonce seen before.
+    db_store = Store()  # shared store stands in for the persistent db
+    a1 = WebhookAdapter()
+    t1 = httpx.ASGITransport(app=a1.asgi_app())
+    async with httpx.AsyncClient(transport=t1, base_url="http://t") as c:
+        await c.post("/inbound", json={"message_id": "1", "text": "x", "nonce": "shared"})
+    await a1.drain(store=db_store, session=None)  # persists the nonce
+
+    a2 = WebhookAdapter()  # "restarted" — empty in-memory nonce set
+    await a2.drain(store=db_store, session=None)  # bind the same store first
+    t2 = httpx.ASGITransport(app=a2.asgi_app())
+    async with httpx.AsyncClient(transport=t2, base_url="http://t") as c:
+        resp = await c.post("/inbound", json={"message_id": "2", "text": "y", "nonce": "shared"})
+    assert resp.status_code == 409
+
+
 def test_default_bind_host_is_loopback() -> None:
     assert WebhookAdapter().host == "127.0.0.1"

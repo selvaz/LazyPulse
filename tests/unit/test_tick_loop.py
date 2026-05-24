@@ -219,3 +219,74 @@ async def test_stale_record_fails_after_max_restarts() -> None:
     assert rec.status == "failed"
     assert rec.error == "exceeded max restarts"
     assert len(engine.calls) == 0
+
+
+async def test_intake_error_does_not_drop_rest_of_batch() -> None:
+    # A policy that raises on one message must not abort the whole tick or
+    # prevent the other messages from being processed.
+    clock = FakeClock()
+    store = Store()
+
+    class FlakyPolicy(PulsePolicy):
+        def classify(self, inbound: IM) -> Identity:
+            if inbound.sender_raw == "boom":
+                raise RuntimeError("classify exploded")
+            return Identity(sender=inbound.sender_raw, trust=TrustLevel.SYSTEM)
+
+    engine = MockEngine(["ok"])
+    pulse = PulseAgent(
+        name="p",
+        engine=engine,
+        store=store,
+        clock=clock,
+        policy=FlakyPolicy(),
+        adapters=[
+            MockAdapter([_msg("1", sender="boom"), _msg("2", sender="fine"), _msg("3", sender="fine")])
+        ],
+    )
+    report = await pulse.tick_once()
+    # The two good messages still ran despite the first one blowing up intake.
+    assert report.completed == 2
+    assert len(engine.calls) == 2
+
+
+async def test_running_record_within_window_not_recovered() -> None:
+    # A worker that is legitimately still running (started recently relative to
+    # stale_after) must NOT be reset and re-run.
+    clock = FakeClock()
+    store = Store()
+    fresh = PulseRecord(
+        text="still working",
+        status="running",
+        created_at=clock.now - timedelta(seconds=30),
+        run_at=clock.now - timedelta(seconds=30),
+        started_at=clock.now - timedelta(seconds=30),
+    )
+    store.write(store_keys.task_key(fresh.task_id), fresh.model_dump(mode="json"))
+    engine = MockEngine(["x"])
+    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock, stale_after=120)
+
+    report = await pulse.tick_once()
+    assert report.recovered == 0
+    assert _records(store)[0].status == "running"  # left alone
+    assert len(engine.calls) == 0
+
+
+async def test_stale_after_is_configurable() -> None:
+    clock = FakeClock()
+    store = Store()
+    rec = PulseRecord(
+        text="orphan",
+        status="running",
+        created_at=clock.now - timedelta(seconds=30),
+        run_at=clock.now - timedelta(seconds=30),
+        started_at=clock.now - timedelta(seconds=30),
+    )
+    store.write(store_keys.task_key(rec.task_id), rec.model_dump(mode="json"))
+    engine = MockEngine(["done"])
+    # 30s old > stale_after=10 → recovered and re-run.
+    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock, stale_after=10)
+
+    report = await pulse.tick_once()
+    assert report.recovered == 1
+    assert _records(store)[0].status == "completed"

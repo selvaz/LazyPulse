@@ -12,7 +12,7 @@ so it imports without the Gmail extra and is testable with a fake client.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
@@ -38,9 +38,6 @@ class GmailInboxConfig:
     #: makes that trade-off deliberately.
     scope: Literal["metadata", "readonly"] = "metadata"
     default_action: ActionClass = ActionClass.READ_PUBLIC
-    metadata_headers: list[str] = field(
-        default_factory=lambda: ["From", "To", "Subject", "Date", "Authentication-Results"]
-    )
 
     def __post_init__(self) -> None:
         if self.scope == "readonly":

@@ -41,6 +41,11 @@ def test_init_propagates_agent_kwargs() -> None:
     assert isinstance(pulse, Agent)
 
 
+def test_store_is_required() -> None:
+    with pytest.raises(ValueError, match="requires store"):
+        PulseAgent(name="pulse", engine=MockEngine())
+
+
 def test_init_creates_independent_semaphores() -> None:
     a = PulseAgent(name="a", engine=MockEngine(), store=Store(), max_concurrent_inbound=2)
     b = PulseAgent(name="b", engine=MockEngine(), store=Store(), max_concurrent_inbound=5)
@@ -59,7 +64,7 @@ async def test_start_twice_raises() -> None:
 async def test_stop_without_start_is_noop() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store())
     await pulse.stop()  # must not raise
-    assert not pulse.running_loop()
+    assert not pulse.is_running()
 
 
 async def test_stop_twice_is_noop() -> None:
@@ -67,23 +72,23 @@ async def test_stop_twice_is_noop() -> None:
     await pulse.start()
     await pulse.stop()
     await pulse.stop()  # second stop is a no-op
-    assert not pulse.running_loop()
+    assert not pulse.is_running()
 
 
 async def test_running_context_manager_starts_and_stops() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
     async with pulse.running():
-        assert pulse.running_loop()
-    assert not pulse.running_loop()
+        assert pulse.is_running()
+    assert not pulse.is_running()
 
 
 async def test_running_cleans_up_on_exception() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
     with pytest.raises(ValueError):
         async with pulse.running():
-            assert pulse.running_loop()
+            assert pulse.is_running()
             raise ValueError("boom")
-    assert not pulse.running_loop()
+    assert not pulse.is_running()
 
 
 async def test_no_policy_allows_message() -> None:

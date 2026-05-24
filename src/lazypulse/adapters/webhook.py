@@ -60,6 +60,10 @@ class WebhookAdapter:
         self._buffer: list[InboundMessage] = []
         self._seen_nonces: set[str] = set()
         self._pending_nonces: set[str] = set()
+        # Bound on the first drain so the request handler can consult the Store
+        # for replay protection that outlives the process (the in-memory set is
+        # empty after a restart).
+        self._store: Store | None = None
         self._lock = asyncio.Lock()
 
     # ------------------------------------------------------------------ #
@@ -67,11 +71,12 @@ class WebhookAdapter:
     # ------------------------------------------------------------------ #
     async def drain(self, *, store: Store, session: Session | None = None) -> list[InboundMessage]:
         async with self._lock:
+            self._store = store
             messages = self._buffer
             self._buffer = []
             nonces = self._pending_nonces
             self._pending_nonces = set()
-        # Persist nonces so replay protection outlives the process.
+        # Flush nonces seen before the Store was bound.
         for nonce in nonces:
             store.write(store_keys.WEBHOOK_NONCE.format(nonce=nonce), {"seen_at": _now_iso()})
         return messages
@@ -112,11 +117,20 @@ class WebhookAdapter:
 
         nonce = data.get("nonce")
         if nonce is not None:
+            nonce_key = store_keys.WEBHOOK_NONCE.format(nonce=nonce)
             async with self._lock:
-                if nonce in self._seen_nonces:
+                seen = nonce in self._seen_nonces or (
+                    self._store is not None and self._store.read(nonce_key) is not None
+                )
+                if seen:
                     return JSONResponse({"error": "replay detected"}, status_code=409)
                 self._seen_nonces.add(nonce)
-                self._pending_nonces.add(nonce)
+                if self._store is not None:
+                    self._store.write(nonce_key, {"seen_at": _now_iso()})
+                else:
+                    # Store not bound yet (no drain has run) — persist on the
+                    # next drain instead.
+                    self._pending_nonces.add(nonce)
 
         action = _parse_action(data.get("requested_action"))
         message = InboundMessage(

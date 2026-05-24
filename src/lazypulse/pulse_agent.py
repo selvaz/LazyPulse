@@ -57,6 +57,7 @@ class PulseAgent(Agent):
         policy: PulsePolicy | None = None,
         tick_seconds: float = 1.0,
         max_concurrent_inbound: int = 4,
+        stale_after: float | None = None,
         clock: Callable[[], datetime] | None = None,
         **agent_kwargs: Any,
     ) -> None:
@@ -64,10 +65,21 @@ class PulseAgent(Agent):
         # this instance with the Session and validates the engine/tool map;
         # attributes we set before it would be invisible to that wiring.
         super().__init__(**agent_kwargs)
+        if self.store is None:
+            raise ValueError(
+                "PulseAgent requires store=. Task lifecycle (scheduled/running/"
+                "completed) lives in the Store; pass store=Store() (in-memory) or "
+                "store=Store(db='pulse.db') (persistent)."
+            )
         self._adapters: list[Adapter] = list(adapters or [])
         self._policy = policy
         self._tick_seconds = tick_seconds
         self._max_concurrent = max_concurrent_inbound
+        # A ``running`` record older than this many seconds is presumed to be
+        # from a crashed process and is recovered. Default is generous (at
+        # least 5 minutes) so a legitimately slow worker is not re-run; tune
+        # down for fast tasks, up for long ones. See ``_recover_stale``.
+        self._stale_after = stale_after if stale_after is not None else max(tick_seconds * 60, 300.0)
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._tick_task: asyncio.Task[None] | None = None
         # Created here (not as a parameter default) so each PulseAgent gets
@@ -96,7 +108,7 @@ class PulseAgent(Agent):
         except asyncio.CancelledError:
             pass
 
-    def running_loop(self) -> bool:
+    def is_running(self) -> bool:
         """True while the background tick loop is active."""
         return self._tick_task is not None and not self._tick_task.done()
 
@@ -129,14 +141,23 @@ class PulseAgent(Agent):
 
         for msg in await self._drain_adapters():
             report.drained += 1
-            self._intake(msg, now, report)
+            try:
+                self._intake(msg, now, report)
+            except Exception as exc:
+                self._emit(
+                    "pulse.intake_error",
+                    {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}"},
+                )
 
         due = self._collect_due(now)
         report.due = len(due)
         if due:
             await self._run_due(due, report)
 
-        self._emit("pulse.tick", report.model_dump(mode="json"))
+        # Only emit when something happened — a quiet tick every ``tick_seconds``
+        # would otherwise flood the Session of a long-running agent.
+        if report.drained or report.due or report.recovered:
+            self._emit("pulse.tick", report.model_dump(mode="json"))
         return report
 
     async def _tick_loop(self) -> None:
@@ -224,9 +245,14 @@ class PulseAgent(Agent):
         return due
 
     async def _run_due(self, due: list[tuple[str, dict[str, Any]]], report: TickReport) -> None:
-        results = await asyncio.gather(*(self._run_one(key, raw) for key, raw in due))
+        results = await asyncio.gather(*(self._run_one(key, raw) for key, raw in due), return_exceptions=True)
         for outcome in results:
-            if outcome == "completed":
+            if isinstance(outcome, BaseException):
+                # A store write failed unexpectedly — count it and keep going;
+                # one bad task must not abort the rest of the batch.
+                self._emit("pulse.run_error", {"error": f"{type(outcome).__name__}: {outcome}"})
+                report.failed += 1
+            elif outcome == "completed":
                 report.completed += 1
             elif outcome in ("failed", "rejected"):
                 report.failed += 1
@@ -234,14 +260,17 @@ class PulseAgent(Agent):
     async def _run_one(self, key: str, expected: dict[str, Any]) -> str | None:
         """Claim one scheduled record via CAS, run it, and persist the result.
 
-        Returns the terminal status, or ``None`` if the CAS lost (another
-        tick / PulseAgent already claimed this task)."""
+        Returns the terminal status, or ``None`` when a CAS lost — either the
+        initial scheduled→running claim (another ticker owns it) or the final
+        write (crash recovery reset the record mid-run). Persisting the result
+        via CAS against our own ``running`` snapshot means a slow worker can
+        never clobber a record that recovery has already taken over."""
         async with self._sema:
             started = PulseRecord.model_validate(expected).model_copy(
                 update={"status": "running", "started_at": self._clock()}
             )
             running_dict = started.model_dump(mode="json")
-            assert self.store is not None  # guaranteed by _intake's check
+            assert self.store is not None  # guaranteed by the __init__ check
             if not self.store.compare_and_swap(key, expected, running_dict):
                 return None  # lost the race — someone else owns this task
 
@@ -251,11 +280,15 @@ class PulseAgent(Agent):
                 final = started.model_copy(
                     update={"status": "failed", "completed_at": self._clock(), "error": f"{type(exc).__name__}: {exc}"}
                 )
-                self.store.write(key, final.model_dump(mode="json"))
-                return "failed"
+            else:
+                final = _finalize(started, env, self._clock())
 
-            final = _finalize(started, env, self._clock())
-            self.store.write(key, final.model_dump(mode="json"))
+            if not self.store.compare_and_swap(key, running_dict, final.model_dump(mode="json")):
+                # Recovery (or another process) took the record over while we
+                # ran. Don't resurrect it — the worker's side effects already
+                # happened, but the ledger is no longer ours to write.
+                self._emit("pulse.write_conflict", {"task_id": started.task_id, "would_be_status": final.status})
+                return None
             return final.status
 
     # ------------------------------------------------------------------ #
@@ -265,7 +298,7 @@ class PulseAgent(Agent):
         """Reset ``running`` records that have been in flight implausibly long
         back to ``scheduled`` so a crashed process's work is retried. After
         ``_MAX_RESTARTS`` resets the task is marked ``failed``."""
-        threshold = timedelta(seconds=max(self._tick_seconds, 1.0) * 60)
+        threshold = timedelta(seconds=self._stale_after)
         for key, raw in self._scan_records():
             if raw.get("status") != "running":
                 continue
@@ -320,13 +353,14 @@ def _status_for_decision(decision: PolicyDecision) -> tuple[str, str]:
 
 
 def _finalize(started: PulseRecord, env: Any, now: datetime) -> PulseRecord:
+    cost = _total_cost(env)
     if env.ok:
         return started.model_copy(
             update={
                 "status": "completed",
                 "completed_at": now,
                 "worker_text": env.text(),
-                "cost_usd": getattr(env.metadata, "cost_usd", 0.0),
+                "cost_usd": cost,
             }
         )
     err = env.error
@@ -338,9 +372,18 @@ def _finalize(started: PulseRecord, env: Any, now: datetime) -> PulseRecord:
             "status": status,
             "completed_at": now,
             "error": err.message if err is not None else "unknown error",
-            "cost_usd": getattr(env.metadata, "cost_usd", 0.0),
+            "cost_usd": cost,
         }
     )
+
+
+def _total_cost(env: Any) -> float:
+    # ``nested_cost_usd`` aggregates agent-as-tool / Plan sub-agent spend, so a
+    # Plan-engine task reports its full pipeline cost, not just the outer call.
+    meta = getattr(env, "metadata", None)
+    if meta is None:
+        return 0.0
+    return float(getattr(meta, "cost_usd", 0.0)) + float(getattr(meta, "nested_cost_usd", 0.0))
 
 
 def _parse_dt(value: Any) -> datetime | None:

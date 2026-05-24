@@ -27,6 +27,7 @@ loop**, a **trust policy**, and **inbound adapters**.
 pip install lazypulse                # core
 pip install 'lazypulse[webhook]'     # + HTTP intake
 pip install 'lazypulse[gmail]'       # + Gmail polling & draft/send
+pip install 'lazypulse[telegram]'    # + Telegram polling & send
 pip install 'lazypulse[dev]'         # test + lint toolchain
 ```
 
@@ -242,7 +243,12 @@ An adapter is **at-least-once**: dedupe is central, on `message_id`, so it's
 fine (preferable, even) to re-emit a message until LazyPulse has durably
 recorded it — that's what makes a crash between drain and record-write safe.
 A message still becomes at most one task. Built-in adapters: `WebhookAdapter`,
-`GmailInbox`.
+`GmailInbox`, `TelegramInbox`.
+
+Chat platforms make the policy *simpler and stronger* than email:
+`TelegramInbox` carries the platform-authenticated sender id, which can't be
+spoofed, so `TelegramPolicy` keys on `owner_ids=[...]` directly — no
+DKIM/DMARC parsing. A bot or a stranger is rejected before the worker runs.
 
 ### PulseRecord — the task ledger
 
@@ -327,6 +333,7 @@ Runnable files in [`examples/`](examples/) (01, 05, 06 need no credentials):
 | `04_store_review_thin_client.py` | a reviewer CLI |
 | `05_plan_routing_deterministico.py` | route by category with a `Plan` engine |
 | `06_multi_pulse_shared_store.py` | two agents, one Store, no double-runs |
+| `07_telegram_polling.py` | watch a Telegram bot, reply only to the owner |
 
 ## Docs
 

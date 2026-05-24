@@ -60,6 +60,12 @@ __version__ = "0.1.0"
 
 if TYPE_CHECKING:
     from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy, GmailTools
+    from lazypulse.adapters.telegram import (
+        TelegramInbox,
+        TelegramInboxConfig,
+        TelegramPolicy,
+        TelegramTools,
+    )
     from lazypulse.adapters.webhook import WebhookAdapter
 
 # Symbols served lazily by ``__getattr__`` so importing them does not force
@@ -70,6 +76,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "GmailInboxConfig": ("lazypulse.adapters.gmail", "gmail"),
     "GmailPolicy": ("lazypulse.adapters.gmail", "gmail"),
     "GmailTools": ("lazypulse.adapters.gmail", "gmail"),
+    "TelegramInbox": ("lazypulse.adapters.telegram", "telegram"),
+    "TelegramInboxConfig": ("lazypulse.adapters.telegram", "telegram"),
+    "TelegramPolicy": ("lazypulse.adapters.telegram", "telegram"),
+    "TelegramTools": ("lazypulse.adapters.telegram", "telegram"),
 }
 
 
@@ -109,6 +119,10 @@ __all__ = [
     "GmailInboxConfig",
     "GmailPolicy",
     "GmailTools",
+    "TelegramInbox",
+    "TelegramInboxConfig",
+    "TelegramPolicy",
+    "TelegramTools",
     # Review (HumanEngine channel)
     "StoreReviewerUI",
     "pending_reviews",

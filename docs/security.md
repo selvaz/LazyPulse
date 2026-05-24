@@ -60,6 +60,14 @@ can be called. So:
   survive forwarding — `GmailInbox` pins the authserv-id and uses first-wins
   selection to reject them. For full multi-hop email-auth verification,
   validate upstream and pass the result in `metadata`.
+- **Chat platforms are authenticated for you.** `TelegramPolicy` keys on the
+  numeric `message.from.id`, which Telegram verifies server-side and a sender
+  cannot spoof — a stronger, simpler signal than email (no header to forge).
+  `TelegramPolicy` also rejects bot accounts. The same shape applies to any
+  platform-authenticated channel: classify on the verified user id, not on
+  any field the sender can set. When intaking over a webhook, still verify the
+  platform's signature (Slack signing secret, Telegram secret token, Discord
+  Ed25519) the way `WebhookAdapter` checks its HMAC.
 
 ## Operational notes
 

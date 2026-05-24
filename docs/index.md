@@ -9,7 +9,7 @@ before anything risky (like sending an email) actually happens.
     A `PulseAgent` **is** a `lazybridge.Agent` with three additions — a tick
     loop, a trust policy, and inbound adapters. Capabilities (Gmail/Telegram
     clients + guarded send tools) come from
-    [LazyTools](https://selvaz.github.io/LazyTools/). See the
+    [LazyTools](https://tools.lazybridge.com/). See the
     [ecosystem overview](https://lazybridge.com/ecosystem/).
 
 ```

@@ -1,6 +1,6 @@
 site_name: LazyPulse
 site_description: Always-on agents — a tick loop, a trust policy, and inbound adapters on top of LazyBridge.
-site_url: https://selvaz.github.io/LazyPulse/
+site_url: https://pulse.lazybridge.com/
 repo_url: https://github.com/selvaz/LazyPulse
 repo_name: selvaz/LazyPulse
 edit_uri: edit/main/docs/

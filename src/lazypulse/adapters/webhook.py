@@ -54,13 +54,20 @@ class WebhookAdapter:
         port: int = 8099,
         path: str = "/inbound",
         store: Store | None = None,
+        max_buffer_size: int = 1000,
     ) -> None:
         self.name = name
         self.shared_secret = shared_secret
         self.host = host
         self.port = port
         self.path = path
+        self._max_buffer_size = max_buffer_size
         self._buffer: list[InboundMessage] = []
+        # _seen_nonces holds nonces received before the Store was bound (i.e.
+        # before the first drain). Once drain runs it writes them to the Store
+        # and clears this set, so it never grows beyond the burst of requests
+        # that arrived before the first drain. After that, the Store is the
+        # canonical nonce record and this set stays empty.
         self._seen_nonces: set[str] = set()
         self._pending_nonces: set[str] = set()
         # Bound on the first drain (or up front via store=) so the request
@@ -79,9 +86,14 @@ class WebhookAdapter:
             self._buffer = []
             nonces = self._pending_nonces
             self._pending_nonces = set()
-        # Flush nonces seen before the Store was bound.
+        # Flush nonces that arrived before the Store was bound.
         for nonce in nonces:
             store.write(store_keys.WEBHOOK_NONCE.format(nonce=nonce), {"seen_at": _now_iso()})
+        # Now that they're in the Store, prune them from the in-memory set so
+        # _seen_nonces doesn't grow without bound over the life of the process.
+        if nonces:
+            async with self._lock:
+                self._seen_nonces -= nonces
         return messages
 
     # ------------------------------------------------------------------ #
@@ -122,17 +134,20 @@ class WebhookAdapter:
         if nonce is not None:
             nonce_key = store_keys.WEBHOOK_NONCE.format(nonce=nonce)
             async with self._lock:
-                seen = nonce in self._seen_nonces or (
-                    self._store is not None and self._store.read(nonce_key) is not None
-                )
-                if seen:
-                    return JSONResponse({"error": "replay detected"}, status_code=409)
-                self._seen_nonces.add(nonce)
                 if self._store is not None:
+                    # Store is bound: use it as the canonical nonce record.
+                    # Do NOT also add to _seen_nonces — the Store is durable
+                    # and _seen_nonces would grow unboundedly if we did.
+                    if self._store.read(nonce_key) is not None:
+                        return JSONResponse({"error": "replay detected"}, status_code=409)
                     self._store.write(nonce_key, {"seen_at": _now_iso()})
                 else:
-                    # Store not bound yet (no drain has run) — persist on the
-                    # next drain instead.
+                    # Store not bound yet (no drain has run): use in-memory
+                    # set as a fallback. These are flushed to the Store and
+                    # cleared from _seen_nonces on the first drain.
+                    if nonce in self._seen_nonces:
+                        return JSONResponse({"error": "replay detected"}, status_code=409)
+                    self._seen_nonces.add(nonce)
                     self._pending_nonces.add(nonce)
 
         action = _parse_action(data.get("requested_action"))
@@ -146,6 +161,8 @@ class WebhookAdapter:
             metadata=data.get("metadata") or {},
         )
         async with self._lock:
+            if len(self._buffer) >= self._max_buffer_size:
+                return JSONResponse({"error": "buffer full"}, status_code=503)
             self._buffer.append(message)
         return JSONResponse({"status": "queued", "message_id": message.message_id}, status_code=202)
 

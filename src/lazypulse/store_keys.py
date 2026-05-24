@@ -31,6 +31,9 @@ WEBHOOK_NONCE = "pulse:webhook:nonce:{nonce}"
 #: Prefix used to enumerate every task record in the Store.
 TASK_PREFIX = "pulse:task:"
 
+#: Prefix used to enumerate pending review requests (derived from REVIEW_REQ).
+REVIEW_REQ_PREFIX = "pulse:review:req:"
+
 
 def task_key(task_id: str) -> str:
     return TASK.format(task_id=task_id)

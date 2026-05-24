@@ -62,10 +62,9 @@ def test_no_adapters_no_policy_is_fine() -> None:
     PulseAgent(name="pulse", engine=MockEngine(), store=Store())
 
 
-def test_init_creates_independent_semaphores() -> None:
+def test_max_concurrent_configured() -> None:
     a = PulseAgent(name="a", engine=MockEngine(), store=Store(), max_concurrent_inbound=2)
     b = PulseAgent(name="b", engine=MockEngine(), store=Store(), max_concurrent_inbound=5)
-    assert a._sema is not b._sema
     assert a._max_concurrent == 2 and b._max_concurrent == 5
 
 
@@ -142,6 +141,32 @@ def test_running_loop_processes_message_end_to_end() -> None:
             time.sleep(0.02)
         time.sleep(0.05)
     rec = _only_record(store)
+    assert rec.status == "completed"
+
+
+def test_tick_then_background_loop_no_cross_loop_error() -> None:
+    # tick() runs on a throwaway loop; start() runs its own loop in a thread.
+    # A per-instance Semaphore would bind to the first loop and blow up in the
+    # second — the per-tick semaphore must avoid that entirely.
+    store = Store()
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["one", "two"]),
+        store=store,
+        adapters=[MockAdapter([_msg("1")])],
+        unsafe_allow_all=True,
+        tick_seconds=0.02,
+    )
+    pulse.tick()  # loop A
+    scheduled_id = pulse.schedule("a second task")
+    with pulse.running():  # loop B (background thread)
+        deadline = time.monotonic() + 2.0
+        while time.monotonic() < deadline:
+            rec = PulseRecord.model_validate(store.read(store_keys.task_key(scheduled_id)))
+            if rec.status == "completed":
+                break
+            time.sleep(0.02)
+    rec = PulseRecord.model_validate(store.read(store_keys.task_key(scheduled_id)))
     assert rec.status == "completed"
 
 

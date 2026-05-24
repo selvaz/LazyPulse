@@ -22,6 +22,7 @@ import concurrent.futures
 import threading
 import time
 import uuid
+import warnings
 from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -103,9 +104,6 @@ class PulseAgent(Agent):
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tick_task: asyncio.Task[None] | None = None
-        # Created here (not as a parameter default) so each PulseAgent gets
-        # its own semaphore rather than sharing one across instances.
-        self._sema = asyncio.Semaphore(max_concurrent_inbound)
 
     # ------------------------------------------------------------------ #
     # Lifecycle — all synchronous; the event loop is hidden in a thread.
@@ -150,6 +148,16 @@ class PulseAgent(Agent):
             return
         loop.call_soon_threadsafe(loop.stop)
         thread.join(timeout=10.0)
+        if thread.is_alive():
+            # A worker is wedged (e.g. blocking sync work on the loop thread).
+            # Don't pretend we stopped: leave the state so is_running() stays
+            # truthful and a re-start raises instead of spawning a second loop.
+            warnings.warn(
+                f"PulseAgent {self.name!r} did not stop within 10s; the loop thread is still alive.",
+                RuntimeWarning,
+                stacklevel=2,
+            )
+            return
         self._loop = None
         self._thread = None
         self._tick_task = None
@@ -362,7 +370,18 @@ class PulseAgent(Agent):
         return due
 
     async def _run_due(self, due: list[tuple[str, dict[str, Any]]], report: TickReport) -> None:
-        results = await asyncio.gather(*(self._run_one(key, raw) for key, raw in due), return_exceptions=True)
+        # The concurrency gate is created here, per tick, so it binds to the
+        # event loop actually running this tick — never carried across loops
+        # (sync tick() spins a throwaway loop; start() runs its own; an async
+        # host has its own). An instance-level Semaphore would bind to the
+        # first loop that touched it and raise everywhere else.
+        sema = asyncio.Semaphore(self._max_concurrent)
+
+        async def _guarded(key: str, raw: dict[str, Any]) -> str | None:
+            async with sema:
+                return await self._run_one(key, raw)
+
+        results = await asyncio.gather(*(_guarded(key, raw) for key, raw in due), return_exceptions=True)
         for outcome in results:
             if isinstance(outcome, BaseException):
                 # A store write failed unexpectedly — count it and keep going;
@@ -381,32 +400,33 @@ class PulseAgent(Agent):
         initial scheduled→running claim (another ticker owns it) or the final
         write (crash recovery reset the record mid-run). Persisting the result
         via CAS against our own ``running`` snapshot means a slow worker can
-        never clobber a record that recovery has already taken over."""
-        async with self._sema:
-            started = PulseRecord.model_validate(expected).model_copy(
-                update={"status": "running", "started_at": self._clock()}
+        never clobber a record that recovery has already taken over.
+
+        Concurrency is bounded by the caller (``_run_due``)."""
+        started = PulseRecord.model_validate(expected).model_copy(
+            update={"status": "running", "started_at": self._clock()}
+        )
+        running_dict = started.model_dump(mode="json")
+        assert self.store is not None  # guaranteed by the __init__ check
+        if not self.store.compare_and_swap(key, expected, running_dict):
+            return None  # lost the race — someone else owns this task
+
+        try:
+            env = await self.run(started.text)
+        except Exception as exc:
+            final = started.model_copy(
+                update={"status": "failed", "completed_at": self._clock(), "error": f"{type(exc).__name__}: {exc}"}
             )
-            running_dict = started.model_dump(mode="json")
-            assert self.store is not None  # guaranteed by the __init__ check
-            if not self.store.compare_and_swap(key, expected, running_dict):
-                return None  # lost the race — someone else owns this task
+        else:
+            final = _finalize(started, env, self._clock())
 
-            try:
-                env = await self.run(started.text)
-            except Exception as exc:
-                final = started.model_copy(
-                    update={"status": "failed", "completed_at": self._clock(), "error": f"{type(exc).__name__}: {exc}"}
-                )
-            else:
-                final = _finalize(started, env, self._clock())
-
-            if not self.store.compare_and_swap(key, running_dict, final.model_dump(mode="json")):
-                # Recovery (or another process) took the record over while we
-                # ran. Don't resurrect it — the worker's side effects already
-                # happened, but the ledger is no longer ours to write.
-                self._emit("pulse.write_conflict", {"task_id": started.task_id, "would_be_status": final.status})
-                return None
-            return final.status
+        if not self.store.compare_and_swap(key, running_dict, final.model_dump(mode="json")):
+            # Recovery (or another process) took the record over while we
+            # ran. Don't resurrect it — the worker's side effects already
+            # happened, but the ledger is no longer ours to write.
+            self._emit("pulse.write_conflict", {"task_id": started.task_id, "would_be_status": final.status})
+            return None
+        return final.status
 
     # ------------------------------------------------------------------ #
     # Crash recovery

@@ -6,30 +6,29 @@ messages, runs each through a :class:`PulsePolicy` (trust + authorization),
 and dispatches the authorized ones to the agent's normal ``run`` path. Task
 lifecycle lives in the lazybridge ``Store``.
 
-Quickstart::
+Quickstart (synchronous — no asyncio in your code)::
 
-    import asyncio
+    import time
+    from datetime import datetime, timezone
     from lazybridge import Store
     from lazypulse import PulseAgent, InboundMessage
     from lazypulse.testing import MockEngine, MockAdapter
-    from datetime import datetime, timezone
 
-    async def main():
-        store = Store()
-        pulse = PulseAgent(
-            name="pulse",
-            engine=MockEngine(["handled"]),
-            store=store,
-            adapters=[MockAdapter([
-                InboundMessage(source="mock", message_id="1",
-                               received_at=datetime.now(timezone.utc), text="hello"),
-            ])],
-            tick_seconds=0.05,
-        )
-        async with pulse.running():
-            await asyncio.sleep(0.3)
-
-    asyncio.run(main())
+    store = Store()
+    pulse = PulseAgent(
+        name="pulse",
+        engine=MockEngine(["handled"]),
+        store=store,
+        adapters=[MockAdapter([
+            InboundMessage(source="mock", message_id="1",
+                           received_at=datetime.now(timezone.utc), text="hello"),
+        ])],
+        unsafe_allow_all=True,   # dev only — pass policy=... in production
+        tick_seconds=0.05,
+    )
+    with pulse.running():        # background loop; stops on block exit
+        time.sleep(0.3)
+    # ...or pulse.serve() to block until Ctrl-C, or pulse.tick() for one beat.
 
 The Gmail adapter (``GmailInbox``, ``GmailPolicy``, ``GmailTools``) and the
 HTTP ``WebhookAdapter`` are imported lazily so ``import lazypulse`` never

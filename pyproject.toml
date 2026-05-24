@@ -23,7 +23,7 @@ classifiers = [
     "Topic :: Scientific/Engineering :: Artificial Intelligence",
 ]
 dependencies = [
-    "lazybridge>=0.7.9,<0.9",
+    "lazybridge>=0.7.9,<0.10",
     "pydantic>=2.0.0,<3.0.0",
 ]
 

@@ -27,7 +27,7 @@ work with no special-casing.
 | Shared, atomic state | `Store` (+ `compare_and_swap`) | Task lifecycle ledger; CAS claims; idempotency markers; review channel. |
 | Observability | `Session.emit` | `pulse.tick`, `pulse.tick_error`, `pulse.adapter_error` events. |
 | Human approval | `HumanEngine(ui=…)` | `StoreReviewerUI` routes the prompt through the Store. |
-| Worker capabilities | `ToolProvider` | `GmailTools` (draft/send). |
+| Worker capabilities | `ToolProvider` | `GmailTools` (draft/send) — in `lazytools.connectors.gmail`. |
 | Output typing | `output=Model` | Structured triage for routing. |
 
 ## Components (all new code)
@@ -41,8 +41,8 @@ PulseRecord              models.py        per-task lifecycle ledger (Store)
 TickReport               models.py        per-tick summary / event payload
 StoreReviewerUI          review.py        Store-backed HumanEngine UI
 WebhookAdapter           adapters/webhook HTTP intake (extra: webhook)
-GmailInbox / Policy /    adapters/gmail   polling + auth classification +
-  Tools / auth parser                     guarded draft/send (extra: gmail)
+GmailInbox / Policy      adapters/gmail   polling + auth classification
+                                          (send tools: lazytools.connectors.gmail, extra: gmail)
 ```
 
 ## One tick, start to finish

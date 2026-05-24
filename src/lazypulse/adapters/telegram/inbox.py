@@ -12,7 +12,7 @@ so a crash between drain and record-write simply re-fetches it next poll.
 Central dedupe means a message still becomes at most one task.
 
 Depends only on the duck-typed
-:class:`~lazypulse.adapters.telegram.client.TelegramService`, so it imports
+:class:`~lazytools.connectors.telegram.client.TelegramService`, so it imports
 without the ``telegram`` extra and is testable with a fake client.
 """
 

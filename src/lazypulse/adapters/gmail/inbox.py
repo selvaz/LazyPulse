@@ -7,7 +7,7 @@ recorded it (the central ``store_keys.EVENT`` marker exists), so a crash
 between drain and record-write cannot lose mail. Central dedupe means a
 message still becomes at most one task.
 
-Depends only on the duck-typed :class:`~lazypulse.adapters.gmail.client.GmailService`,
+Depends only on the duck-typed :class:`~lazytools.connectors.gmail.client.GmailService`,
 so it imports without the Gmail extra and is testable with a fake client.
 """
 

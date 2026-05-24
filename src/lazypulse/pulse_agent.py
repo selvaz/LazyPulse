@@ -139,7 +139,13 @@ class PulseAgent(Agent):
 
         self._thread = threading.Thread(target=_runner, name=f"pulse[{self.name}]", daemon=True)
         self._thread.start()
-        ready.wait(timeout=5.0)
+        if not ready.wait(timeout=5.0):
+            # The loop thread never signalled readiness — don't hand back a
+            # half-started agent whose is_running() lies.
+            self._thread = None
+            self._loop = None
+            self._tick_task = None
+            raise RuntimeError(f"PulseAgent {self.name!r} loop did not become ready within 5s")
 
     def stop(self) -> None:
         """Stop the tick loop and join its thread. Safe to call twice and safe

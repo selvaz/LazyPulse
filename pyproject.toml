@@ -28,6 +28,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# NOTE: the gmail/telegram extras depend on ``lazytoolkit`` (where the moved
+# clients/tools live). Those installs require ``lazytoolkit`` to be resolvable
+# by pip — i.e. once it is published to PyPI. Until then, install it from the
+# repo first (``pip install "lazytoolkit[gmail] @ git+https://github.com/selvaz/LazyTools.git@<sha>"``).
 # HTTP intake adapter (WebhookAdapter). Kept optional so the core install
 # stays dependency-light for users who only poll Gmail or use custom adapters.
 webhook = ["starlette>=0.37,<1.0", "uvicorn>=0.29,<1.0"]

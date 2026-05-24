@@ -10,7 +10,7 @@ before anything risky (like sending an email) actually happens.
     loop, a trust policy, and inbound adapters. Capabilities (Gmail/Telegram
     clients + guarded send tools) come from
     [LazyTools](https://tools.lazybridge.com/). See the
-    [ecosystem overview](https://lazybridge.com/ecosystem/).
+    [ecosystem overview](https://lazybridge.com/).
 
 ```
    inbound message            PulsePolicy                 your Agent

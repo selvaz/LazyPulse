@@ -36,6 +36,7 @@ from lazypulse.models import (
     InboundMessage,
     PolicyDecision,
     PulseRecord,
+    PulseStatus,
     TickReport,
     TrustLevel,
 )
@@ -293,6 +294,7 @@ class PulseAgent(Agent):
     async def _drain_adapters(self) -> list[InboundMessage]:
         if not self._adapters:
             return []
+        assert self.store is not None  # guaranteed by the __init__ check
         out: list[InboundMessage] = []
         for adapter in self._adapters:
             try:
@@ -493,7 +495,7 @@ def _run_sync(coro: Any) -> Any:
         return pool.submit(asyncio.run, coro).result()
 
 
-def _status_for_decision(decision: PolicyDecision) -> tuple[str, str]:
+def _status_for_decision(decision: PolicyDecision) -> tuple[PulseStatus, str]:
     """Map a policy decision to an initial record status and the TickReport
     counter to bump."""
     if decision == PolicyDecision.ALLOW:

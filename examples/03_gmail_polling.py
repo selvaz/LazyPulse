@@ -18,8 +18,6 @@ allowed to act; everyone else is rejected or queued for review.
 
 from __future__ import annotations
 
-import asyncio
-
 from lazybridge import LLMEngine, Session, Store
 
 from lazypulse import PulseAgent
@@ -29,7 +27,7 @@ OWNER = "me@example.com"
 GMAIL_METADATA_SCOPE = ["https://www.googleapis.com/auth/gmail.metadata"]
 
 
-async def main() -> None:
+def main() -> None:
     client = GmailClient.from_credentials(
         credentials_path="credentials.json",
         token_path="token.json",
@@ -48,9 +46,8 @@ async def main() -> None:
     )
 
     print("Polling Gmail every 15s. Ctrl-C to stop.")
-    async with pulse.running():
-        await asyncio.Event().wait()
+    pulse.serve()  # blocks until interrupted — no async, no event loop to manage
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

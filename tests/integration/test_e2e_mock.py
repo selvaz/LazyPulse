@@ -38,12 +38,16 @@ async def test_webhook_to_completion() -> None:
         resp = await client.post("/inbound", json={"message_id": "1", "text": "do the thing", "sender": "a@x"})
         assert resp.status_code == 202
 
-        async with pulse.running():
-            for _ in range(50):
-                await asyncio.sleep(0.02)
-                if engine.calls:
-                    break
-            await asyncio.sleep(0.05)
+    # The loop runs in its own thread (sync start/stop); just wait real time.
+    pulse.start()
+    try:
+        for _ in range(100):
+            await asyncio.sleep(0.02)
+            if engine.calls:
+                break
+        await asyncio.sleep(0.05)
+    finally:
+        pulse.stop()
 
     recs = _records(store)
     assert len(recs) == 1

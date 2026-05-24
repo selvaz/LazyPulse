@@ -18,8 +18,11 @@ propagates for free.
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import threading
+import time
 import uuid
-from contextlib import asynccontextmanager
+from contextlib import contextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
 
@@ -37,7 +40,7 @@ from lazypulse.models import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import AsyncIterator, Callable
+    from collections.abc import Callable, Iterator
 
     from lazybridge import EventType
 
@@ -95,49 +98,100 @@ class PulseAgent(Agent):
         # down for fast tasks, up for long ones. See ``_recover_stale``.
         self._stale_after = stale_after if stale_after is not None else max(tick_seconds * 60, 300.0)
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
+        # The loop runs on its own event loop in a daemon thread, so user code
+        # stays synchronous — no asyncio.run / await / async with required.
+        self._thread: threading.Thread | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._tick_task: asyncio.Task[None] | None = None
         # Created here (not as a parameter default) so each PulseAgent gets
         # its own semaphore rather than sharing one across instances.
         self._sema = asyncio.Semaphore(max_concurrent_inbound)
 
     # ------------------------------------------------------------------ #
-    # Lifecycle
+    # Lifecycle — all synchronous; the event loop is hidden in a thread.
     # ------------------------------------------------------------------ #
-    async def start(self) -> None:
-        """Start the background tick loop. Returns immediately."""
-        if self._tick_task is not None:
-            raise RuntimeError(f"PulseAgent {self.name!r} already started")
-        self._tick_task = asyncio.create_task(self._tick_loop(), name=f"pulse_loop[{self.name}]")
+    def start(self) -> None:
+        """Start the tick loop in a background thread. Non-blocking.
 
-    async def stop(self) -> None:
-        """Stop the tick loop. Tolerates being called without a prior start
-        and being called twice."""
-        task = self._tick_task
-        if task is None:
+        Returns once the loop is live; keep doing whatever you like on the
+        main thread (or just let the process idle). Call :meth:`stop` to end
+        it, or use :meth:`running` / :meth:`serve`."""
+        if self.is_running():
+            raise RuntimeError(f"PulseAgent {self.name!r} already started")
+        ready = threading.Event()
+
+        def _runner() -> None:
+            loop = asyncio.new_event_loop()
+            self._loop = loop
+            asyncio.set_event_loop(loop)
+            self._tick_task = loop.create_task(self._tick_loop())
+            loop.call_soon(ready.set)
+            try:
+                loop.run_forever()
+            finally:
+                task = self._tick_task
+                if task is not None:
+                    task.cancel()
+                    try:
+                        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+                    except RuntimeError:
+                        pass
+                loop.close()
+
+        self._thread = threading.Thread(target=_runner, name=f"pulse[{self.name}]", daemon=True)
+        self._thread.start()
+        ready.wait(timeout=5.0)
+
+    def stop(self) -> None:
+        """Stop the tick loop and join its thread. Safe to call twice and safe
+        to call without a prior :meth:`start`."""
+        loop, thread = self._loop, self._thread
+        if loop is None or thread is None:
             return
+        loop.call_soon_threadsafe(loop.stop)
+        thread.join(timeout=10.0)
+        self._loop = None
+        self._thread = None
         self._tick_task = None
-        task.cancel()
-        try:
-            await task
-        except asyncio.CancelledError:
-            pass
 
     def is_running(self) -> bool:
         """True while the background tick loop is active."""
-        return self._tick_task is not None and not self._tick_task.done()
+        return self._thread is not None and self._thread.is_alive()
 
-    @asynccontextmanager
-    async def running(self) -> AsyncIterator[None]:
-        """Context manager that runs the loop for the duration of the block::
+    @contextmanager
+    def running(self) -> Iterator[None]:
+        """Run the loop for the duration of a ``with`` block::
 
-        async with pulse.running():
-            await asyncio.Event().wait()   # serve forever
+            with pulse.running():
+                time.sleep(3600)        # serve for an hour
         """
-        await self.start()
+        self.start()
         try:
             yield
         finally:
-            await self.stop()
+            self.stop()
+
+    def serve(self) -> None:
+        """Start the loop and block until interrupted (Ctrl-C). The one-liner
+        for an always-on agent::
+
+            PulseAgent(...).serve()
+        """
+        self.start()
+        try:
+            while self.is_running():
+                time.sleep(0.25)
+        except KeyboardInterrupt:
+            pass
+        finally:
+            self.stop()
+
+    def tick(self) -> TickReport:
+        """Run exactly one beat synchronously, without starting the loop.
+
+        Handy for cron-style one-shots and scripts. Don't mix with a running
+        background loop — use one or the other."""
+        return _run_sync(self.tick_once())
 
     # ------------------------------------------------------------------ #
     # Scheduling (programmatic, trusted)
@@ -403,6 +457,20 @@ class PulseAgent(Agent):
             session.emit(cast("EventType", event), payload)
         except Exception:
             pass
+
+
+def _run_sync(coro: Any) -> Any:
+    """Run a coroutine to completion from synchronous code.
+
+    Mirrors lazybridge's ``Agent.__call__`` bridge: run on a fresh loop when
+    there's no loop running, and offload to a worker thread when called from
+    inside one (so a sync call from an async app doesn't explode)."""
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+        return pool.submit(asyncio.run, coro).result()
 
 
 def _status_for_decision(decision: PolicyDecision) -> tuple[str, str]:

@@ -45,39 +45,34 @@ Swap `MockEngine` for `LLMEngine("claude-opus-4-7")` and `MockAdapter` for a
 real one to go live.
 
 ```python
-import asyncio
+import time
 from datetime import datetime, timezone
 
 from lazybridge import Store
 from lazypulse import PulseAgent, InboundMessage, PulseRecord, store_keys
 from lazypulse.testing import MockEngine, MockAdapter
 
-async def main():
-    store = Store()                       # task lifecycle lives here
-    pulse = PulseAgent(
-        name="assistant",
-        engine=MockEngine(["Summary: 3 unread, all low priority."]),
-        store=store,
-        adapters=[MockAdapter([
-            InboundMessage(
-                source="demo", message_id="1",
-                received_at=datetime.now(timezone.utc),
-                text="summarise my unread mail",
-            ),
-        ])],
-        unsafe_allow_all=True,                # dev only: run inbound without a policy
-        tick_seconds=0.05,
-    )
+store = Store()                       # task lifecycle lives here
+pulse = PulseAgent(
+    name="assistant",
+    engine=MockEngine(["Summary: 3 unread, all low priority."]),
+    store=store,
+    adapters=[MockAdapter([
+        InboundMessage(source="demo", message_id="1",
+                       received_at=datetime.now(timezone.utc),
+                       text="summarise my unread mail"),
+    ])],
+    unsafe_allow_all=True,            # dev only: run inbound without a policy
+    tick_seconds=0.05,
+)
 
-    async with pulse.running():           # start the loop, stop on exit
-        await asyncio.sleep(0.3)
+with pulse.running():                 # background loop; stops on block exit
+    time.sleep(0.3)
 
-    for key in list(store.keys()):
-        if key.startswith(store_keys.TASK_PREFIX):
-            rec = PulseRecord.model_validate(store.read(key))
-            print(rec.status, "→", rec.worker_text)
-
-asyncio.run(main())
+for key in list(store.keys()):
+    if key.startswith(store_keys.TASK_PREFIX):
+        rec = PulseRecord.model_validate(store.read(key))
+        print(rec.status, "→", rec.worker_text)
 # completed → Summary: 3 unread, all low priority.
 ```
 
@@ -91,7 +86,6 @@ pass a `policy=` instead, and a `PulseAgent` with adapters but neither will
 ## A real agent: watch Gmail, draft replies, ask before sending
 
 ```python
-import asyncio
 from lazybridge import LLMEngine, Session, Store
 from lazypulse import PulseAgent
 from lazypulse.adapters.gmail import (
@@ -101,27 +95,23 @@ from lazypulse.adapters.gmail import (
 OWNER = "you@example.com"
 SCOPES = ["https://www.googleapis.com/auth/gmail.metadata"]
 
-async def main():
-    # One-time OAuth: opens a browser, caches token.json (git-ignored).
-    client = GmailClient.from_credentials(
-        credentials_path="credentials.json", token_path="token.json", scopes=SCOPES,
-    )
+# One-time OAuth: opens a browser, caches token.json (git-ignored).
+client = GmailClient.from_credentials(
+    credentials_path="credentials.json", token_path="token.json", scopes=SCOPES,
+)
 
-    pulse = PulseAgent(
-        name="inbox-assistant",
-        engine=LLMEngine("claude-opus-4-7", system="You triage and draft email replies."),
-        tools=[GmailTools(client, allowed_recipients=[OWNER])],   # draft freely; send is gated
-        store=Store(db="pulse.db"),         # persistent: survives restarts
-        session=Session(),                  # observability
-        policy=GmailPolicy(owner_emails=[OWNER]),   # only verified owner mail acts
-        adapters=[GmailInbox(client, GmailInboxConfig(account=OWNER, query="is:unread"))],
-        tick_seconds=15.0,                  # poll every 15s
-    )
+pulse = PulseAgent(
+    name="inbox-assistant",
+    engine=LLMEngine("claude-opus-4-7", system="You triage and draft email replies."),
+    tools=[GmailTools(client, allowed_recipients=[OWNER])],   # draft freely; send is gated
+    store=Store(db="pulse.db"),         # persistent: survives restarts
+    session=Session(),                  # observability
+    policy=GmailPolicy(owner_emails=[OWNER]),   # only verified owner mail acts
+    adapters=[GmailInbox(client, GmailInboxConfig(account=OWNER, query="is:unread"))],
+    tick_seconds=15.0,                  # poll every 15s
+)
 
-    async with pulse.running():
-        await asyncio.Event().wait()        # serve forever (Ctrl-C to stop)
-
-asyncio.run(main())
+pulse.serve()   # polls every 15s in the background, blocks until Ctrl-C
 ```
 
 What happens each tick:
@@ -159,18 +149,23 @@ plus these:
 | `stale_after=` | `max(tick*60, 300)` | A `running` task older than this is treated as crashed and retried. Raise it for slow workers. |
 | `clock=` | UTC now | Inject a clock for deterministic tests. |
 
-Lifecycle control:
+Lifecycle control — all synchronous; the event loop is hidden in a background
+thread, so your code stays plain like a lazybridge `agent("task")` call:
 
 ```python
-await pulse.start()          # launch the loop (non-blocking)
-pulse.is_running()           # -> bool
-await pulse.stop()           # cancel & await the loop (safe to call twice)
+pulse.start()            # launch the loop in a background thread (non-blocking)
+pulse.is_running()       # -> bool
+pulse.stop()             # stop & join the thread (safe to call twice)
 
-async with pulse.running():  # start + guaranteed stop
+with pulse.running():    # start + guaranteed stop
     ...
 
-report = await pulse.tick_once()   # run exactly one beat (great for tests)
+pulse.serve()            # start and block until Ctrl-C — one-liner for a daemon
+report = pulse.tick()    # run exactly one beat synchronously (cron / scripts)
 ```
+
+For embedding inside an event loop you already run (FastAPI, etc.), the async
+primitive `await pulse.tick_once()` is still there.
 
 ### Scheduling — the timer side
 

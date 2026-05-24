@@ -3,22 +3,21 @@
 A common pattern: one agent polls Gmail, another takes webhooks, and both
 write task lifecycle into the same Store. The CAS-based scheduled->running
 claim guarantees no task is ever run twice, even when both agents tick at the
-same time. A single reviewer client can then drain reviews from either.
+same time.
 
-Runs offline with mock engines/adapters.
+Runs offline with mock engines/adapters, fully synchronous.
 
     python examples/06_multi_pulse_shared_store.py
 """
 
 from __future__ import annotations
 
-import asyncio
+import time
 from datetime import UTC, datetime
 
 from lazybridge import Store
 
-from lazypulse import InboundMessage, PulseAgent, store_keys
-from lazypulse.models import PulseRecord
+from lazypulse import InboundMessage, PulseAgent, PulseRecord, store_keys
 from lazypulse.testing import MockAdapter, MockEngine
 
 
@@ -26,28 +25,28 @@ def _msg(source: str, mid: str, text: str) -> InboundMessage:
     return InboundMessage(source=source, message_id=mid, received_at=datetime.now(UTC), text=text)
 
 
-async def main() -> None:
+def main() -> None:
     store = Store()  # the single shared blackboard
 
     gmail_pulse = PulseAgent(
-        unsafe_allow_all=True,
         name="gmail-pulse",
         engine=MockEngine(["handled email"]),
         store=store,
         adapters=[MockAdapter([_msg("gmail", "g1", "reply to the client")])],
+        unsafe_allow_all=True,
         tick_seconds=0.05,
     )
     webhook_pulse = PulseAgent(
-        unsafe_allow_all=True,
         name="webhook-pulse",
         engine=MockEngine(["handled webhook"]),
         store=store,
         adapters=[MockAdapter([_msg("webhook", "w1", "deploy finished, summarise logs")])],
+        unsafe_allow_all=True,
         tick_seconds=0.05,
     )
 
-    async with gmail_pulse.running(), webhook_pulse.running():
-        await asyncio.sleep(0.3)
+    with gmail_pulse.running(), webhook_pulse.running():
+        time.sleep(0.3)
 
     for key in list(store.keys()):
         if key.startswith(store_keys.TASK_PREFIX):
@@ -56,4 +55,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-import asyncio
+import time
 from datetime import UTC, datetime
 
 import pytest
@@ -69,41 +69,42 @@ def test_init_creates_independent_semaphores() -> None:
     assert a._max_concurrent == 2 and b._max_concurrent == 5
 
 
-async def test_start_twice_raises() -> None:
+def test_start_twice_raises() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
-    await pulse.start()
-    with pytest.raises(RuntimeError, match="already started"):
-        await pulse.start()
-    await pulse.stop()
+    pulse.start()
+    try:
+        with pytest.raises(RuntimeError, match="already started"):
+            pulse.start()
+    finally:
+        pulse.stop()
 
 
-async def test_stop_without_start_is_noop() -> None:
+def test_stop_without_start_is_noop() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store())
-    await pulse.stop()  # must not raise
+    pulse.stop()  # must not raise
     assert not pulse.is_running()
 
 
-async def test_stop_twice_is_noop() -> None:
+def test_stop_twice_is_noop() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
-    await pulse.start()
-    await pulse.stop()
-    await pulse.stop()  # second stop is a no-op
+    pulse.start()
+    pulse.stop()
+    pulse.stop()  # second stop is a no-op
     assert not pulse.is_running()
 
 
-async def test_running_context_manager_starts_and_stops() -> None:
+def test_running_context_manager_starts_and_stops() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
-    async with pulse.running():
+    with pulse.running():
         assert pulse.is_running()
     assert not pulse.is_running()
 
 
-async def test_running_cleans_up_on_exception() -> None:
+def test_running_cleans_up_on_exception() -> None:
     pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
-    with pytest.raises(ValueError):
-        async with pulse.running():
-            assert pulse.is_running()
-            raise ValueError("boom")
+    with pytest.raises(ValueError), pulse.running():
+        assert pulse.is_running()
+        raise ValueError("boom")
     assert not pulse.is_running()
 
 
@@ -124,7 +125,7 @@ async def test_no_policy_allows_message() -> None:
     assert rec.worker_text == "done"
 
 
-async def test_running_loop_processes_message_end_to_end() -> None:
+def test_running_loop_processes_message_end_to_end() -> None:
     store = Store()
     engine = MockEngine(["handled"])
     pulse = PulseAgent(
@@ -135,14 +136,27 @@ async def test_running_loop_processes_message_end_to_end() -> None:
         adapters=[MockAdapter([_msg()])],
         tick_seconds=0.02,
     )
-    async with pulse.running():
-        for _ in range(50):
-            await asyncio.sleep(0.02)
-            if engine.calls:
-                break
-    await asyncio.sleep(0.05)
+    with pulse.running():
+        deadline = time.monotonic() + 2.0
+        while not engine.calls and time.monotonic() < deadline:
+            time.sleep(0.02)
+        time.sleep(0.05)
     rec = _only_record(store)
     assert rec.status == "completed"
+
+
+def test_one_shot_tick_is_synchronous() -> None:
+    store = Store()
+    pulse = PulseAgent(
+        unsafe_allow_all=True,
+        name="pulse",
+        engine=MockEngine(["done"]),
+        store=store,
+        adapters=[MockAdapter([_msg()])],
+    )
+    report = pulse.tick()  # sync, no await
+    assert report.completed == 1
+    assert _only_record(store).status == "completed"
 
 
 async def test_idempotent_message_not_run_twice() -> None:

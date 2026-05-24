@@ -19,8 +19,6 @@ With HMAC enabled (shared_secret="topsecret"), sign the raw body:
 
 from __future__ import annotations
 
-import asyncio
-
 from lazybridge import Session, Store
 
 from lazypulse import PulseAgent
@@ -28,9 +26,9 @@ from lazypulse.adapters.webhook import WebhookAdapter
 from lazypulse.testing import MockEngine
 
 
-async def main() -> None:
+def main() -> None:
     store = Store()
-    adapter = WebhookAdapter(host="127.0.0.1", port=8099)  # add shared_secret="..." to require HMAC
+    adapter = WebhookAdapter(host="127.0.0.1", port=8099, store=store)  # add shared_secret="..." for HMAC
 
     pulse = PulseAgent(
         name="webhook-pulse",
@@ -38,19 +36,20 @@ async def main() -> None:
         store=store,
         session=Session(),
         adapters=[adapter],
+        unsafe_allow_all=True,  # demo only — use policy=... in production
         tick_seconds=1.0,
     )
 
-    # Run the HTTP server and the tick loop together.
-    import uvicorn
+    # The tick loop runs in the background; uvicorn owns the main thread.
+    pulse.start()
+    print(f"POST messages to http://{adapter.host}:{adapter.port}{adapter.path}  (Ctrl-C to stop)")
+    try:
+        import uvicorn
 
-    config = uvicorn.Config(adapter.asgi_app(), host=adapter.host, port=adapter.port, log_level="info")
-    server = uvicorn.Server(config)
-
-    async with pulse.running():
-        print(f"POST messages to http://{adapter.host}:{adapter.port}{adapter.path}")
-        await server.serve()
+        uvicorn.run(adapter.asgi_app(), host=adapter.host, port=adapter.port, log_level="info")
+    finally:
+        pulse.stop()
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

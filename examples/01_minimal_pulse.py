@@ -1,27 +1,26 @@
-"""Minimal PulseAgent: a mock engine, a mock adapter, the running() loop.
+"""Minimal PulseAgent: a mock engine, a mock adapter — all synchronous.
 
-Runs with no credentials and no network. Swap MockEngine for
-``LLMEngine("claude-opus-4-7")`` and MockAdapter for a real adapter to go live.
+No asyncio, no await, no event loop to manage — same zero-boilerplate feel as
+lazybridge. Swap MockEngine for ``LLMEngine("claude-opus-4-7")`` and
+MockAdapter for a real adapter to go live.
 
     python examples/01_minimal_pulse.py
 """
 
 from __future__ import annotations
 
-import asyncio
+import time
 from datetime import UTC, datetime
 
 from lazybridge import Store
 
-from lazypulse import InboundMessage, PulseAgent, store_keys
-from lazypulse.models import PulseRecord
+from lazypulse import InboundMessage, PulseAgent, PulseRecord, store_keys
 from lazypulse.testing import MockAdapter, MockEngine
 
 
-async def main() -> None:
+def main() -> None:
     store = Store()
     pulse = PulseAgent(
-        unsafe_allow_all=True,
         name="pulse",
         engine=MockEngine(["I handled your request."]),
         store=store,
@@ -37,11 +36,12 @@ async def main() -> None:
                 ]
             )
         ],
+        unsafe_allow_all=True,  # dev only — pass policy=... in production
         tick_seconds=0.05,
     )
 
-    async with pulse.running():
-        await asyncio.sleep(0.3)  # let a few ticks run
+    with pulse.running():  # background loop; stops on block exit
+        time.sleep(0.3)
 
     for key in list(store.keys()):
         if key.startswith(store_keys.TASK_PREFIX):
@@ -50,4 +50,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

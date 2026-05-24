@@ -4,14 +4,13 @@ A PulseAgent whose engine is a ``Plan`` first triages each message with a
 cheap structured call, then routes — via ``routes_by`` — to the matching
 specialist sub-agent. No orchestration tokens spent; the routing is code.
 
-Runs offline with MockAgent sub-agents (no API key needed).
+Runs offline with MockAgent sub-agents (no API key needed), fully synchronous.
 
     python examples/05_plan_routing_deterministico.py
 """
 
 from __future__ import annotations
 
-import asyncio
 from datetime import UTC, datetime
 from typing import Literal
 
@@ -19,8 +18,7 @@ from lazybridge import Plan, Step, Store
 from lazybridge.testing import MockAgent
 from pydantic import BaseModel
 
-from lazypulse import InboundMessage, PulseAgent, store_keys
-from lazypulse.models import PulseRecord
+from lazypulse import InboundMessage, PulseAgent, PulseRecord, store_keys
 from lazypulse.testing import MockAdapter
 
 
@@ -31,7 +29,7 @@ class Triage(BaseModel):
     confidence: float
 
 
-async def main() -> None:
+def main() -> None:
     # In production: triager = Agent(engine=LLMEngine("claude-haiku-4-5"), output=Triage)
     triager = MockAgent(Triage(category="calendar", confidence=0.9), name="triager", output=Triage)
     research = MockAgent("Researched the topic.", name="research")
@@ -39,7 +37,6 @@ async def main() -> None:
 
     store = Store()
     pulse = PulseAgent(
-        unsafe_allow_all=True,
         name="router",
         engine=Plan(
             Step("triager", output=Triage, routes_by="category"),
@@ -60,11 +57,10 @@ async def main() -> None:
                 ]
             )
         ],
-        tick_seconds=0.05,
+        unsafe_allow_all=True,  # dev only
     )
 
-    async with pulse.running():
-        await asyncio.sleep(0.3)
+    pulse.tick()  # one synchronous beat: drain → route → run
 
     for key in list(store.keys()):
         if key.startswith(store_keys.TASK_PREFIX):
@@ -73,4 +69,4 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()

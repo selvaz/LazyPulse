@@ -1,0 +1,74 @@
+site_name: LazyPulse
+site_description: Always-on agents — a tick loop, a trust policy, and inbound adapters on top of LazyBridge.
+site_url: https://selvaz.github.io/LazyPulse/
+repo_url: https://github.com/selvaz/LazyPulse
+repo_name: selvaz/LazyPulse
+edit_uri: edit/main/docs/
+copyright: Copyright &copy; 2026 LazyPulse — Apache-2.0
+
+docs_dir: docs
+strict: true
+
+theme:
+  name: material
+  language: en
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: amber
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.tracking
+    - navigation.indexes
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - toc.follow
+  icon:
+    repo: fontawesome/brands/github
+
+plugins:
+  - search
+  - llmstxt:
+      full_output: llms-full.txt
+      sections:
+        Overview:
+          - index.md
+        Guides:
+          - architecture.md
+          - plan_engine.md
+          - security.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - def_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Plan as engine: plan_engine.md
+  - Security: security.md

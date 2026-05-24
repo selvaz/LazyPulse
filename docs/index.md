@@ -35,9 +35,9 @@ pip install 'lazypulse[webhook]'         # HTTP intake adapter
 
 - **lazybridge** — `PulseAgent` subclasses `Agent`, so the full Agent surface
   (engine, tools, guard, verify, memory, store, session) works unchanged.
-- **lazytools** — the Gmail/Telegram **inbound adapters** (inbox + trust policy)
-  live here in LazyPulse; the matching **clients and guarded send tools** live
-  in `lazytools.connectors.*`. Installing `lazypulse[gmail]` pulls
+- **lazytools** — the Gmail/Telegram **clients and guarded send tools** live in
+  `lazytools.connectors.*`; the matching **inbound adapters** (inbox + trust
+  policy) live here in LazyPulse. Installing `lazypulse[gmail]` pulls
   `lazytoolkit[gmail]` for you.
 
 The division of labour: a **Tool** the worker invokes mid-run lives in

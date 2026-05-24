@@ -1,24 +1,42 @@
 """Ambient task context for the running worker.
 
 When a :class:`~lazypulse.PulseAgent` runs a task it sets ``active_task_id``
-for the duration of ``Agent.run``. Tools executed by that run can read it to
-bind a one-shot send confirmation to the *specific* task it was granted for,
-so a grant approved for task A can never be consumed by a concurrent task B.
+for the duration of ``Agent.run``. Guarded tools executed by that run (e.g.
+``lazytools`` GmailTools / TelegramTools) read it to bind a one-shot send
+confirmation to the *specific* task it was granted for, so a grant approved for
+task A can never be consumed by a concurrent task B.
+
+The underlying contextvar is :data:`lazytools.safety.active_scope` whenever
+``lazytoolkit`` is installed, so PulseAgent and the moved tools share a single
+context object. Without ``lazytoolkit`` there are no ``lazytools`` tools to
+bind, so a local fallback contextvar is used instead. This keeps
+``lazytoolkit`` an optional dependency of LazyPulse.
 
 The value propagates into **async** tools (lazybridge awaits them in the same
-context) but not into sync tools (lazybridge runs those in a thread pool with
-a fresh context) — which is why the gated send tools are async.
+context) but not into sync tools (run in a fresh thread context) — which is why
+the gated send tools are async.
 """
 
 from __future__ import annotations
 
-import contextvars
+try:
+    from lazytools.safety import active_scope, current_scope
+except ImportError:  # lazytoolkit not installed — no guarded lazytools tools
+    import contextvars
 
-#: The id of the task currently being executed by a PulseAgent, or ``None``
-#: outside a tracked run (e.g. a direct tool call in a test).
-active_task_id: contextvars.ContextVar[str | None] = contextvars.ContextVar("lazypulse_active_task_id", default=None)
+    active_scope = contextvars.ContextVar("lazypulse_active_task_id", default=None)
+
+    def current_scope() -> str | None:
+        return active_scope.get()
+
+
+#: Back-compat aliases — PulseAgent sets ``active_task_id``; tools read it.
+active_task_id = active_scope
 
 
 def current_task_id() -> str | None:
     """Return the id of the task the worker is currently running, if any."""
-    return active_task_id.get()
+    return current_scope()
+
+
+__all__ = ["active_task_id", "current_task_id", "active_scope", "current_scope"]

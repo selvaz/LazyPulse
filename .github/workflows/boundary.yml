@@ -1,7 +1,9 @@
 name: boundary
 
 # Enforces the lazybridge public-surface boundary: shipped LazyPulse source
-# may only import ``lazybridge`` top-level and ``lazybridge.ext.*``.
+# may only import ``lazybridge`` top-level and ``lazybridge.ext.*`` (never
+# lazybridge's private internals). Importing the ``lazytools`` sibling is
+# allowed and not policed here.
 
 on:
   push:
@@ -19,6 +21,9 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
+          # lazytoolkit is not on PyPI (kept private); install the sibling from
+          # the public LazyTools repo (main). Swap for a PyPI release once published.
+          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@main"
           pip install -e ".[dev]"
       - name: Static private-import check
         run: pytest tests/unit/test_no_private_imports.py -q

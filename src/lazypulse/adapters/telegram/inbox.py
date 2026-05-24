@@ -22,8 +22,9 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
+from lazytools.connectors.telegram.client import TelegramService
+
 from lazypulse import store_keys
-from lazypulse.adapters.telegram.client import TelegramService
 from lazypulse.models import ActionClass, InboundMessage
 
 if TYPE_CHECKING:

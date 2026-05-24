@@ -19,9 +19,10 @@ allowed to act; everyone else is rejected or queued for review.
 from __future__ import annotations
 
 from lazybridge import LLMEngine, Session, Store
+from lazytools.connectors.gmail import GmailClient
 
 from lazypulse import PulseAgent
-from lazypulse.adapters.gmail import GmailClient, GmailInbox, GmailInboxConfig, GmailPolicy
+from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
 
 OWNER = "me@example.com"
 GMAIL_METADATA_SCOPE = ["https://www.googleapis.com/auth/gmail.metadata"]

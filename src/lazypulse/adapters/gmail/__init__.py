@@ -1,18 +1,28 @@
 """Gmail adapter for LazyPulse.
 
-Polling inbox, auth-aware policy, and guarded draft/send tools. The Google
-client libraries are only needed to build a real :class:`GmailClient` from
-credentials (``GmailClient.from_credentials``); the rest of the surface
-imports without the ``gmail`` extra and is fully testable with a fake client.
+The inbound polling inbox and the auth-aware policy live here. The Gmail
+**client** and **tools** (``GmailClient``, ``GmailService``, ``GmailTools``,
+``GmailSendBlocked``) and the ``parse_authentication_results`` parser moved to
+the sibling ``lazytoolkit`` package in 0.8 (``pip install 'lazytoolkit[gmail]'``).
+They remain importable from here via a lazy deprecation shim until 0.9.
 """
 
 from __future__ import annotations
 
-from lazypulse.adapters.gmail.auth import parse_authentication_results
-from lazypulse.adapters.gmail.client import GmailClient, GmailService
+import warnings
+from typing import TYPE_CHECKING
+
 from lazypulse.adapters.gmail.inbox import GmailInbox, GmailInboxConfig
 from lazypulse.adapters.gmail.policy import GmailPolicy
-from lazypulse.adapters.gmail.tools import GmailSendBlocked, GmailTools
+
+if TYPE_CHECKING:
+    from lazytools.connectors.gmail import (
+        GmailClient,
+        GmailSendBlocked,
+        GmailService,
+        GmailTools,
+        parse_authentication_results,
+    )
 
 __all__ = [
     "GmailInbox",
@@ -24,3 +34,31 @@ __all__ = [
     "GmailService",
     "parse_authentication_results",
 ]
+
+# Symbols moved to lazytools.connectors.gmail (0.8) — re-exported lazily.
+_MOVED = {
+    "GmailClient",
+    "GmailService",
+    "GmailTools",
+    "GmailSendBlocked",
+    "parse_authentication_results",
+}
+
+
+def __getattr__(name: str):  # PEP 562 — fires only for moved symbols
+    if name in _MOVED:
+        warnings.warn(
+            f"lazypulse.adapters.gmail.{name} moved to lazytools.connectors.gmail in 0.8; "
+            "install 'lazytoolkit' and import from there. This shim is removed in 0.9.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        try:
+            from lazytools.connectors import gmail as _moved
+        except ImportError as exc:
+            raise ImportError(
+                "lazypulse.adapters.gmail now requires 'lazytoolkit' "
+                "(pip install 'lazytoolkit[gmail]')."
+            ) from exc
+        return getattr(_moved, name)
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

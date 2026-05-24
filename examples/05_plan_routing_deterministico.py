@@ -39,6 +39,7 @@ async def main() -> None:
 
     store = Store()
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="router",
         engine=Plan(
             Step("triager", output=Triage, routes_by="category"),

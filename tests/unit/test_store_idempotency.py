@@ -32,7 +32,9 @@ async def test_event_marker_prevents_reprocessing_across_ticks() -> None:
         async def drain(self, *, store, session=None):
             return [_msg("same")]
 
-    pulse = PulseAgent(name="p", engine=engine, store=store, clock=FakeClock(), adapters=[RepeatAdapter()])
+    pulse = PulseAgent(
+        name="p", engine=engine, store=store, clock=FakeClock(), adapters=[RepeatAdapter()], unsafe_allow_all=True
+    )
     await pulse.tick_once()
     await pulse.tick_once()
     await pulse.tick_once()
@@ -49,6 +51,7 @@ async def test_duplicate_id_across_two_adapters_makes_one_task() -> None:
         store=store,
         clock=FakeClock(),
         adapters=[MockAdapter([_msg("dup")]), MockAdapter([_msg("dup")])],
+        unsafe_allow_all=True,
     )
     report = await pulse.tick_once()
     assert report.drained == 2
@@ -81,28 +84,38 @@ async def test_webhook_nonce_dedupe_in_handler() -> None:
     assert b.status_code == 409
 
 
-async def test_gmail_processed_id_dedupe() -> None:
+async def test_gmail_at_least_once_until_event_marker_then_dedupes() -> None:
+    # The adapter re-emits until the PulseAgent has recorded the message
+    # (its central EVENT marker exists), so a crash before record-write can't
+    # lose it. Once recorded, it's skipped.
     store = Store()
     svc = _FakeGmail({"a": _resource(), "b": _resource()})
     inbox = GmailInbox(svc, GmailInboxConfig(account="me@x"))
+
     first = await inbox.drain(store=store, session=None)
-    second = await inbox.drain(store=store, session=None)
-    assert len(first) == 2 and second == []
-    assert svc.get_calls == 2  # the already-processed ids are not re-fetched
+    assert len(first) == 2
+    # No markers yet → re-drain re-emits (at-least-once).
+    again = await inbox.drain(store=store, session=None)
+    assert len(again) == 2
+
+    # Simulate the PulseAgent recording both messages.
+    for m in first:
+        store.write(store_keys.event_key(m.message_id), {"task_id": "t"})
+    assert await inbox.drain(store=store, session=None) == []
 
 
-async def test_processed_marker_persists_in_sqlite(tmp_path) -> None:
+async def test_gmail_dedup_survives_restart_via_event_marker(tmp_path) -> None:
     db = str(tmp_path / "s.db")
     store = Store(db=db)
-    svc = _FakeGmail({"a": _resource()})
-    inbox = GmailInbox(svc, GmailInboxConfig(account="me@x"))
-    await inbox.drain(store=store, session=None)
+    inbox = GmailInbox(_FakeGmail({"a": _resource()}), GmailInboxConfig(account="me@x"))
+    msgs = await inbox.drain(store=store, session=None)
+    store.write(store_keys.event_key(msgs[0].message_id), {"task_id": "t"})  # PulseAgent records it
     store.close()
 
     store2 = Store(db=db)
     inbox2 = GmailInbox(_FakeGmail({"a": _resource()}), GmailInboxConfig(account="me@x"))
     second = await inbox2.drain(store=store2, session=None)
-    assert second == []  # the persisted processed marker survives a restart
+    assert second == []  # the persisted EVENT marker survives a restart
     store2.close()
 
 

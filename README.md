@@ -65,6 +65,7 @@ async def main():
                 text="summarise my unread mail",
             ),
         ])],
+        unsafe_allow_all=True,                # dev only: run inbound without a policy
         tick_seconds=0.05,
     )
 
@@ -80,8 +81,10 @@ asyncio.run(main())
 # completed → Summary: 3 unread, all low priority.
 ```
 
-The loop drained the message, allowed it (no policy = trust everything, for
-local dev), ran your agent, and recorded the result in the Store.
+The loop drained the message, ran your agent, and recorded the result in the
+Store. `unsafe_allow_all=True` is the local-dev shortcut — in production you
+pass a `policy=` instead, and a `PulseAgent` with adapters but neither will
+**refuse to start** (so untrusted mail can't run with full trust by accident).
 
 ---
 
@@ -147,7 +150,8 @@ plus these:
 |---|---|---|
 | `store=` | **required** | Where task lifecycle is kept. `Store()` (memory) or `Store(db="…")` (persistent). |
 | `adapters=` | `[]` | List of inbound sources (`Adapter`s). |
-| `policy=` | `None` | Trust + authorization. `None` = allow everything (dev only). |
+| `policy=` | `None` | Trust + authorization. **Required when `adapters=` is set** (or pass `unsafe_allow_all=True`). |
+| `unsafe_allow_all=` | `False` | Opt out of requiring a policy — runs all inbound with full trust. Local dev only. |
 | `tick_seconds=` | `1.0` | How often the loop wakes up. |
 | `max_concurrent_inbound=` | `4` | Cap on tasks running at once. |
 | `stale_after=` | `max(tick*60, 300)` | A `running` task older than this is treated as crashed and retried. Raise it for slow workers. |
@@ -165,6 +169,21 @@ async with pulse.running():  # start + guaranteed stop
 
 report = await pulse.tick_once()   # run exactly one beat (great for tests)
 ```
+
+### Scheduling — the timer side
+
+Besides reacting to adapters, you can enqueue trusted work yourself. These
+bypass the policy (your own code is trusted) and run on the next tick where
+`run_at <= now`:
+
+```python
+pulse.schedule("post the daily standup summary")            # now
+pulse.schedule_after("retry the export", seconds=300)       # in 5 min
+pulse.schedule_at("send the weekly report", when=monday_9am)
+```
+
+A `schedule`-only agent (no adapters) needs no policy. Combine with a small
+`tick_seconds` for reactive work, or a large one for cron-like jobs.
 
 ### PulsePolicy — who may ask for what
 
@@ -218,9 +237,11 @@ class QueueAdapter:
                                received_at=r.ts, text=r.body) for r in rows]
 ```
 
-`drain()` must be **idempotent** (a re-drain shouldn't re-emit the same
-message). LazyPulse also dedupes on `message_id` as a backstop. Built-in
-adapters: `WebhookAdapter`, `GmailInbox`.
+An adapter is **at-least-once**: dedupe is central, on `message_id`, so it's
+fine (preferable, even) to re-emit a message until LazyPulse has durably
+recorded it — that's what makes a crash between drain and record-write safe.
+A message still becomes at most one task. Built-in adapters: `WebhookAdapter`,
+`GmailInbox`.
 
 ### PulseRecord — the task ledger
 
@@ -254,6 +275,34 @@ for req in pending_reviews(store):
     print(req["task"])
     respond(store, req["review_id"], "approved")
 ```
+
+Separately, tasks the **policy** parked (`awaiting_review` — e.g. an owner's
+external send, or a stranger queued for review) are closed out with the task
+queue API. Nothing runs them until you approve:
+
+```python
+from lazypulse import pending_tasks, approve_task, reject_task
+
+for rec in pending_tasks(store):
+    print(rec.task_id, rec.action_class, rec.text)
+    approve_task(store, rec.task_id)            # → scheduled, runs next tick
+    # or: reject_task(store, rec.task_id, "not appropriate")
+```
+
+Both are compare-and-swap, so two reviewers on one Store can't double-act.
+
+### A note on what the policy does and doesn't gate
+
+The policy authorizes **inbound execution** — whether a message reaches the
+worker at all. It does **not** sandbox the tools your agent then calls. If the
+worker has a tool that sends email or runs code, guard that tool itself
+(as `GmailTools` gates `gmail_send`) or wrap it — the policy won't stop a tool
+call mid-run.
+
+`GmailPolicy`'s DKIM/SPF/DMARC handling is a conservative MVP parser of
+Gmail's own `Authentication-Results` header, not a full standalone email
+authentication verifier. It's sound for "is this really my owner address",
+but if you need rigorous multi-hop verification, validate upstream.
 
 ---
 

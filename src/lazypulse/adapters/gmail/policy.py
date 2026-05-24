@@ -22,6 +22,8 @@ Pure-Python: importable without the Gmail extra.
 
 from __future__ import annotations
 
+from email.utils import parseaddr
+
 from lazypulse.models import Identity, InboundMessage, TrustLevel
 from lazypulse.policy import PulsePolicy
 
@@ -32,7 +34,10 @@ class GmailPolicy(PulsePolicy):
         dkim = bool(auth.get("dkim"))
         spf = bool(auth.get("spf"))
         dmarc = bool(auth.get("dmarc"))
-        sender = (inbound.sender_raw or "").lower()
+        # A real From header is ``"Display Name <addr@host>"``; extract just
+        # the address so owner matching works (parseaddr also handles a bare
+        # address and an encoded display name).
+        sender = parseaddr(inbound.sender_raw or "")[1].lower()
         is_owner = sender in {e.lower() for e in self.owner_emails}
         is_allowed_external = sender in {e.lower() for e in self.allowed_external_senders}
 

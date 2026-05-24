@@ -24,6 +24,7 @@ async def test_webhook_to_completion() -> None:
     engine = MockEngine(["handled"])
     adapter = WebhookAdapter()
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pulse",
         engine=engine,
         store=store,

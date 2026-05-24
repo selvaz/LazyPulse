@@ -18,6 +18,7 @@ propagates for free.
 from __future__ import annotations
 
 import asyncio
+import uuid
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any, cast
@@ -26,6 +27,7 @@ from lazybridge import Agent
 
 from lazypulse import store_keys
 from lazypulse.models import (
+    ActionClass,
     Identity,
     InboundMessage,
     PolicyDecision,
@@ -58,6 +60,7 @@ class PulseAgent(Agent):
         tick_seconds: float = 1.0,
         max_concurrent_inbound: int = 4,
         stale_after: float | None = None,
+        unsafe_allow_all: bool = False,
         clock: Callable[[], datetime] | None = None,
         **agent_kwargs: Any,
     ) -> None:
@@ -73,6 +76,17 @@ class PulseAgent(Agent):
             )
         self._adapters: list[Adapter] = list(adapters or [])
         self._policy = policy
+        self._unsafe_allow_all = unsafe_allow_all
+        # Safety gate: a PulseAgent ingesting from external adapters with no
+        # policy would run *every* inbound message (the no-policy path grants
+        # SYSTEM trust). That is fine for local prototyping but a footgun in
+        # production, so require an explicit opt-in.
+        if self._adapters and self._policy is None and not unsafe_allow_all:
+            raise ValueError(
+                "PulseAgent has adapters but no policy=. Untrusted inbound would run "
+                "with full trust. Pass a policy=PulsePolicy(...) (recommended) or "
+                "unsafe_allow_all=True to explicitly opt into allow-all for local dev."
+            )
         self._tick_seconds = tick_seconds
         self._max_concurrent = max_concurrent_inbound
         # A ``running`` record older than this many seconds is presumed to be
@@ -124,6 +138,45 @@ class PulseAgent(Agent):
             yield
         finally:
             await self.stop()
+
+    # ------------------------------------------------------------------ #
+    # Scheduling (programmatic, trusted)
+    # ------------------------------------------------------------------ #
+    def schedule(
+        self,
+        text: str,
+        *,
+        run_at: datetime | None = None,
+        action: ActionClass = ActionClass.READ_PUBLIC,
+    ) -> str:
+        """Enqueue a task to run at ``run_at`` (default: now). Returns its ``task_id``.
+
+        This is the timer side of LazyPulse — pair it with ``tick_seconds`` to
+        run work on a schedule. Programmatic scheduling is **trusted**: the
+        caller is your own code, so it bypasses the policy (which exists to
+        authorize *external* inbound messages). The loop runs it on the first
+        tick where ``run_at <= now``."""
+        now = self._clock()
+        record = PulseRecord(
+            text=text,
+            status="scheduled",
+            created_at=now,
+            run_at=run_at or now,
+            source_event_id=f"local:{uuid.uuid4()}",
+            identity=Identity(trust=TrustLevel.SYSTEM),
+            action_class=action,
+            decision=PolicyDecision.ALLOW,
+        )
+        self._write_record(record)
+        return record.task_id
+
+    def schedule_after(self, text: str, seconds: float, **kwargs: Any) -> str:
+        """Schedule a task to run ``seconds`` from now. Returns its ``task_id``."""
+        return self.schedule(text, run_at=self._clock() + timedelta(seconds=seconds), **kwargs)
+
+    def schedule_at(self, text: str, when: datetime, **kwargs: Any) -> str:
+        """Schedule a task to run at the absolute time ``when``. Returns its ``task_id``."""
+        return self.schedule(text, run_at=when, **kwargs)
 
     # ------------------------------------------------------------------ #
     # The tick
@@ -218,9 +271,19 @@ class PulseAgent(Agent):
             action_class=msg.requested_action,
             decision=decision,
         )
-        self.store.write(store_keys.task_key(record.task_id), record.model_dump(mode="json"))
-        self.store.write(event_key, {"task_id": record.task_id})
+        self._write_record(record)
         setattr(report, tally, getattr(report, tally) + 1)
+
+    def _write_record(self, record: PulseRecord) -> None:
+        """Persist a record and its idempotency marker.
+
+        The EVENT marker keyed on ``source_event_id`` is the single dedupe
+        point: an adapter may re-emit a message until this marker exists
+        (at-least-once), and intake skips anything already marked."""
+        assert self.store is not None
+        self.store.write(store_keys.task_key(record.task_id), record.model_dump(mode="json"))
+        if record.source_event_id is not None:
+            self.store.write(store_keys.event_key(record.source_event_id), {"task_id": record.task_id})
 
     def _authorize(self, msg: InboundMessage) -> tuple[Identity, PolicyDecision]:
         # No policy → dev mode: everything is allowed. Useful for local

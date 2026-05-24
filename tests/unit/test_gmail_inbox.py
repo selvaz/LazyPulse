@@ -54,20 +54,24 @@ async def test_drain_emits_one_message_each() -> None:
     assert m.metadata["auth"] == {"dkim": True, "spf": True, "dmarc": True}
 
 
-async def test_idempotent_second_drain_is_empty() -> None:
+async def test_drain_dedupes_once_event_marker_exists() -> None:
     store = Store()
     inbox = _inbox({"a": _resource("x@y.com", "Hi", "b", _PASS), "c": _resource("z@y.com", "Yo", "d", _PASS)})
     first = await inbox.drain(store=store, session=None)
-    second = await inbox.drain(store=store, session=None)
     assert len(first) == 2
-    assert second == []
+    # Mark both as recorded (as the PulseAgent would) → next drain is empty.
+    for m in first:
+        store.write(store_keys.event_key(m.message_id), {"task_id": "t"})
+    assert await inbox.drain(store=store, session=None) == []
 
 
-async def test_processed_marker_written() -> None:
+async def test_drain_is_at_least_once_before_recording() -> None:
+    # Without an event marker (e.g. a crash before the record was written),
+    # a re-drain re-emits the message rather than silently dropping it.
     store = Store()
     inbox = _inbox({"a": _resource("x@y.com", "Hi", "b", _PASS)})
-    await inbox.drain(store=store, session=None)
-    assert store.read(store_keys.GMAIL_PROCESSED.format(message_id="a")) is not None
+    assert len(await inbox.drain(store=store, session=None)) == 1
+    assert len(await inbox.drain(store=store, session=None)) == 1
 
 
 async def test_default_action_propagates() -> None:
@@ -116,6 +120,17 @@ async def test_allowed_external_with_passing_auth_is_external_verified() -> None
     msg = (await inbox.drain(store=Store(), session=None))[0]
     policy = GmailPolicy(owner_emails=["me@example.com"], allowed_external_senders=["client@partner.com"])
     assert policy.classify(msg).trust == TrustLevel.EXTERNAL_VERIFIED
+
+
+async def test_owner_verified_with_display_name_from_header() -> None:
+    # A real From header has a display name: "Doctor Selva <doctor.selva@gmail.com>".
+    # Owner matching must extract the bare address, not compare the raw header.
+    inbox = _inbox({"a": _resource("Doctor Selva <doctor.selva@gmail.com>", "Hi", "b", _PASS)})
+    msg = (await inbox.drain(store=Store(), session=None))[0]
+    policy = GmailPolicy(owner_emails=["doctor.selva@gmail.com"])
+    identity = policy.classify(msg)
+    assert identity.trust == TrustLevel.OWNER_VERIFIED_EMAIL
+    assert identity.sender == "doctor.selva@gmail.com"
 
 
 async def test_unknown_sender_is_unknown() -> None:

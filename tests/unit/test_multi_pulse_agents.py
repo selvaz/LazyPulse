@@ -25,8 +25,8 @@ async def test_two_agents_each_own_adapter_share_store() -> None:
     store = Store()
     clock = FakeClock()
     e1, e2 = MockEngine(["a"]), MockEngine(["b"])
-    p1 = PulseAgent(name="p1", engine=e1, store=store, clock=clock, adapters=[MockAdapter([_msg("1")])])
-    p2 = PulseAgent(name="p2", engine=e2, store=store, clock=clock, adapters=[MockAdapter([_msg("2")])])
+    p1 = PulseAgent(name="p1", engine=e1, store=store, clock=clock, adapters=[MockAdapter([_msg("1")])], unsafe_allow_all=True)
+    p2 = PulseAgent(name="p2", engine=e2, store=store, clock=clock, adapters=[MockAdapter([_msg("2")])], unsafe_allow_all=True)
     await asyncio.gather(p1.tick_once(), p2.tick_once())
     recs = _records(store)
     assert len(recs) == 2
@@ -52,8 +52,8 @@ async def test_distinct_task_ids_do_not_collide() -> None:
     store = Store()
     clock = FakeClock()
     e1, e2 = MockEngine(["a"]), MockEngine(["b"])
-    p1 = PulseAgent(name="p1", engine=e1, store=store, clock=clock, adapters=[MockAdapter([_msg(f"a{i}") for i in range(3)])])
-    p2 = PulseAgent(name="p2", engine=e2, store=store, clock=clock, adapters=[MockAdapter([_msg(f"b{i}") for i in range(3)])])
+    p1 = PulseAgent(name="p1", engine=e1, store=store, clock=clock, adapters=[MockAdapter([_msg(f"a{i}") for i in range(3)])], unsafe_allow_all=True)
+    p2 = PulseAgent(name="p2", engine=e2, store=store, clock=clock, adapters=[MockAdapter([_msg(f"b{i}") for i in range(3)])], unsafe_allow_all=True)
     await asyncio.gather(p1.tick_once(), p2.tick_once())
     recs = _records(store)
     assert len({r.task_id for r in recs}) == 6

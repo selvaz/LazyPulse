@@ -46,6 +46,22 @@ def test_store_is_required() -> None:
         PulseAgent(name="pulse", engine=MockEngine())
 
 
+def test_adapters_without_policy_raises() -> None:
+    with pytest.raises(ValueError, match="adapters but no policy"):
+        PulseAgent(name="pulse", engine=MockEngine(), store=Store(), adapters=[MockAdapter([_msg()])])
+
+
+def test_adapters_without_policy_allowed_with_unsafe_flag() -> None:
+    PulseAgent(
+        name="pulse", engine=MockEngine(), store=Store(), adapters=[MockAdapter([_msg()])], unsafe_allow_all=True
+    )
+
+
+def test_no_adapters_no_policy_is_fine() -> None:
+    # A schedule-only agent has no external intake, so no policy is required.
+    PulseAgent(name="pulse", engine=MockEngine(), store=Store())
+
+
 def test_init_creates_independent_semaphores() -> None:
     a = PulseAgent(name="a", engine=MockEngine(), store=Store(), max_concurrent_inbound=2)
     b = PulseAgent(name="b", engine=MockEngine(), store=Store(), max_concurrent_inbound=5)
@@ -94,6 +110,7 @@ async def test_running_cleans_up_on_exception() -> None:
 async def test_no_policy_allows_message() -> None:
     store = Store()
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pulse",
         engine=MockEngine(["done"]),
         store=store,
@@ -111,6 +128,7 @@ async def test_running_loop_processes_message_end_to_end() -> None:
     store = Store()
     engine = MockEngine(["handled"])
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pulse",
         engine=engine,
         store=store,
@@ -132,6 +150,7 @@ async def test_idempotent_message_not_run_twice() -> None:
     engine = MockEngine(["done"])
     # Two adapters emitting the SAME message id → one task only.
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pulse",
         engine=engine,
         store=store,
@@ -148,7 +167,7 @@ async def test_requested_action_propagates_to_record() -> None:
     msg = InboundMessage(
         source="mock", message_id="x", received_at=_now(), text="rm -rf", requested_action="destructive"
     )
-    pulse = PulseAgent(name="pulse", engine=MockEngine(), store=store, adapters=[MockAdapter([msg])])
+    pulse = PulseAgent(name="pulse", engine=MockEngine(), store=store, adapters=[MockAdapter([msg])], unsafe_allow_all=True)
     await pulse.tick_once()
     rec = _only_record(store)
     assert rec.action_class.value == "destructive"

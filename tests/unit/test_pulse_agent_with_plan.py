@@ -34,6 +34,7 @@ async def test_linear_plan_runs_all_steps() -> None:
     a = MockAgent("A-out", name="a")
     b = MockAgent("B-out", name="b")
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pipe",
         engine=Plan(Step("a"), Step("b")),
         tools=[a, b],
@@ -60,6 +61,7 @@ async def test_plan_routes_by_field() -> None:
     research = MockAgent("RESEARCH", name="research")
     calendar = MockAgent("CALENDAR", name="calendar")
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="router",
         engine=Plan(
             Step("triager", output=Triage, routes_by="category"),
@@ -86,6 +88,7 @@ async def test_each_message_gets_its_own_task_record() -> None:
     a = MockAgent("A", name="a")
     b = MockAgent("B", name="b")
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pipe",
         engine=Plan(Step("a"), Step("b")),
         tools=[a, b],

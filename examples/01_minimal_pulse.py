@@ -21,6 +21,7 @@ from lazypulse.testing import MockAdapter, MockEngine
 async def main() -> None:
     store = Store()
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="pulse",
         engine=MockEngine(["I handled your request."]),
         store=store,

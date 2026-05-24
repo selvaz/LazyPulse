@@ -1,9 +1,11 @@
 """Gmail polling adapter.
 
 Polls a mailbox for new messages, classifies their authentication signals,
-and emits one :class:`~lazypulse.models.InboundMessage` per message.
-Idempotent: a message id seen once is recorded under
-``store_keys.GMAIL_PROCESSED`` and never emitted again.
+and emits one :class:`~lazypulse.models.InboundMessage` per message. The
+adapter is at-least-once: it re-emits a message until the PulseAgent has
+recorded it (the central ``store_keys.EVENT`` marker exists), so a crash
+between drain and record-write cannot lose mail. Central dedupe means a
+message still becomes at most one task.
 
 Depends only on the duck-typed :class:`~lazypulse.adapters.gmail.client.GmailService`,
 so it imports without the Gmail extra and is testable with a fake client.
@@ -58,16 +60,19 @@ class GmailInbox:
         self._config = config
 
     async def drain(self, *, store: Store, session: Session | None = None) -> list[InboundMessage]:
+        # At-least-once: a message is skipped only once the PulseAgent has
+        # durably recorded it (its central EVENT marker exists). Until then we
+        # re-emit on every poll, so a crash between drain and record-write
+        # cannot lose the message. Central dedupe means it still becomes at
+        # most one task.
         out: list[InboundMessage] = []
         for message_id in self._client.list_message_ids(
             query=self._config.query, max_results=self._config.max_results
         ):
-            processed_key = store_keys.GMAIL_PROCESSED.format(message_id=message_id)
-            if store.read(processed_key) is not None:
+            if store.read(store_keys.event_key(message_id)) is not None:
                 continue
             raw = self._client.get_message(message_id)
             out.append(self._to_inbound(message_id, raw))
-            store.write(processed_key, {"processed_at": datetime.now(UTC).isoformat()})
         return out
 
     def _to_inbound(self, message_id: str, raw: dict[str, Any]) -> InboundMessage:

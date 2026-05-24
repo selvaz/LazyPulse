@@ -54,6 +54,7 @@ async def test_max_concurrency_is_respected() -> None:
     engine = MockEngine(["ok"], delay=0.05)
     msgs = [_msg(str(i)) for i in range(5)]
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="p",
         engine=engine,
         store=store,
@@ -72,6 +73,7 @@ async def test_worker_exception_marks_failed_and_loop_continues() -> None:
     # First message raises, second succeeds — use a per-call engine.
     engine = MockEngine(["ok"], raises=RuntimeError("boom"))
     pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="p", engine=engine, store=store, clock=clock, adapters=[MockAdapter([_msg("1"), _msg("2")])]
     )
     report = await pulse.tick_once()
@@ -92,7 +94,14 @@ async def test_guard_blocked_envelope_marks_rejected() -> None:
         async def run(self, env, **kwargs):  # type: ignore[override]
             return Envelope.error_envelope(GuardBlocked("output blocked"))
 
-    pulse = PulseAgent(name="p", engine=BlockingEngine(), store=store, clock=clock, adapters=[MockAdapter([_msg("1")])])
+    pulse = PulseAgent(
+        name="p",
+        engine=BlockingEngine(),
+        store=store,
+        clock=clock,
+        adapters=[MockAdapter([_msg("1")])],
+        unsafe_allow_all=True,
+    )
     await pulse.tick_once()
     rec = _records(store)[0]
     assert rec.status == "rejected"
@@ -102,7 +111,14 @@ async def test_policy_none_auto_allows() -> None:
     clock = FakeClock()
     store = Store()
     engine = MockEngine(["done"])
-    pulse = PulseAgent(name="p", engine=engine, store=store, clock=clock, adapters=[MockAdapter([_msg("1")])])
+    pulse = PulseAgent(
+        name="p",
+        engine=engine,
+        store=store,
+        clock=clock,
+        adapters=[MockAdapter([_msg("1")])],
+        unsafe_allow_all=True,
+    )
     report = await pulse.tick_once()
     assert report.scheduled == 1
     assert report.completed == 1

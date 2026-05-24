@@ -21,8 +21,8 @@ EVENT = "pulse:event:{event_id}"
 REVIEW_REQ = "pulse:review:req:{review_id}"
 REVIEW_RESP = "pulse:review:resp:{review_id}"
 
-#: Gmail idempotency + cursor.
-GMAIL_PROCESSED = "pulse:gmail:processed:{message_id}"
+#: Gmail history cursor (reserved for future history-based polling). Message
+#: idempotency uses the central ``EVENT`` marker, not a Gmail-specific key.
 LAST_HISTORY = "pulse:gmail:last_history_id:{account}"
 
 #: Webhook replay protection.

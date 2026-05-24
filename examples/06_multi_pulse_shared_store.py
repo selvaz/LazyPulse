@@ -30,6 +30,7 @@ async def main() -> None:
     store = Store()  # the single shared blackboard
 
     gmail_pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="gmail-pulse",
         engine=MockEngine(["handled email"]),
         store=store,
@@ -37,6 +38,7 @@ async def main() -> None:
         tick_seconds=0.05,
     )
     webhook_pulse = PulseAgent(
+        unsafe_allow_all=True,
         name="webhook-pulse",
         engine=MockEngine(["handled webhook"]),
         store=store,

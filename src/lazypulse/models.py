@@ -140,6 +140,7 @@ class TickReport(BaseModel):
     queued_for_review: int = 0
     rejected: int = 0
     recovered: int = 0
+    pruned: int = 0
     due: int = 0
     completed: int = 0
     failed: int = 0

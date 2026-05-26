@@ -12,7 +12,7 @@ share one Store: a second approval of the same task simply returns ``False``.
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING
 
 from lazypulse import store_keys
@@ -20,6 +20,9 @@ from lazypulse.models import PulseRecord
 
 if TYPE_CHECKING:
     from lazybridge import Store
+
+#: Statuses a task can no longer leave — safe to delete once old enough.
+_TERMINAL_STATUSES = frozenset({"completed", "rejected", "failed"})
 
 
 def pending_tasks(store: Store) -> list[PulseRecord]:
@@ -62,3 +65,45 @@ def reject_task(store: Store, task_id: str, reason: str) -> bool:
         update={"status": "rejected", "completed_at": datetime.now(UTC), "error": reason}
     )
     return store.compare_and_swap(key, raw, updated.model_dump(mode="json"))
+
+
+def purge_terminal_tasks(
+    store: Store,
+    *,
+    older_than: timedelta,
+    now: datetime | None = None,
+) -> int:
+    """Delete terminal task records older than ``older_than``; return the count.
+
+    A task in a terminal status (``completed`` / ``rejected`` / ``failed``)
+    never changes again, so once its ``completed_at`` is older than the
+    retention window it is safe to drop. This keeps an always-on agent's Store
+    from growing without bound — and keeps the per-tick record scan from
+    getting slower over time.
+
+    Idempotency markers (``pulse:event:*``) are **left in place**: they are tiny
+    and deleting them would let an adapter re-ingest a long-finished message as
+    a brand-new task. Run this from a cron, or let ``PulseAgent`` call it
+    automatically by passing ``terminal_retention=``.
+    """
+    cutoff = (now or datetime.now(UTC)) - older_than
+    deleted = 0
+    for key in list(store.keys()):
+        if not key.startswith(store_keys.TASK_PREFIX):
+            continue
+        raw = store.read(key)
+        if not isinstance(raw, dict) or raw.get("status") not in _TERMINAL_STATUSES:
+            continue
+        completed_at = raw.get("completed_at")
+        if not isinstance(completed_at, str):
+            continue
+        try:
+            ts = datetime.fromisoformat(completed_at)
+        except ValueError:
+            continue
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=UTC)
+        if ts <= cutoff:
+            store.delete(key)
+            deleted += 1
+    return deleted

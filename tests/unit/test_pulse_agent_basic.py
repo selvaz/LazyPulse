@@ -120,6 +120,47 @@ def test_running_cleans_up_on_exception() -> None:
     assert not pulse.is_running()
 
 
+def test_tick_while_running_raises() -> None:
+    # tick() spins a throwaway loop with a per-call concurrency gate; mixing it
+    # with the live background loop would exceed the global cap and let two
+    # tickers race. Refuse it.
+    pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
+    with pulse.running(), pytest.raises(RuntimeError, match="already running its background loop"):
+        pulse.tick()
+    # Once stopped, tick() works again.
+    assert pulse.tick().due == 0
+
+
+def test_stop_warns_when_thread_wedged() -> None:
+    # Simulate a worker wedged on the loop thread: stop() can't join it, so it
+    # must warn and leave is_running() truthful instead of pretending it stopped.
+    pulse = PulseAgent(name="pulse", engine=MockEngine(), store=Store(), tick_seconds=10)
+    pulse.start()
+    real_thread = pulse._thread
+    assert real_thread is not None
+
+    class _WedgedThread:
+        def join(self, timeout: float | None = None) -> None:
+            return None
+
+        def is_alive(self) -> bool:
+            return True
+
+    pulse._thread = _WedgedThread()  # type: ignore[assignment]
+    try:
+        with pytest.warns(RuntimeWarning, match="did not stop within 10s"):
+            pulse.stop()
+        # State left intact (not reset) so a re-start raises instead of spawning
+        # a second loop.
+        assert pulse._loop is not None
+        assert pulse._thread is not None
+    finally:
+        # Real cleanup: restore the genuine thread and stop it for real.
+        pulse._thread = real_thread
+        pulse.stop()
+    assert not pulse.is_running()
+
+
 async def test_no_policy_allows_message() -> None:
     store = Store()
     pulse = PulseAgent(

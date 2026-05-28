@@ -146,6 +146,13 @@ class PulseAgent(Agent):
         self._inflight: set[str] = set()
         self._bg_tasks: set[asyncio.Task[None]] = set()
         self._sema: asyncio.Semaphore | None = None
+        # Background dispatch (``await_due=False``) returns before its workers
+        # finish, so the tick that dispatched them can't report their terminal
+        # outcome. Workers tally their result here; the next emitted tick folds
+        # these in (and clears them) so live-loop ``pulse.tick`` events carry
+        # accurate completed/failed counts. Only touched on the loop thread.
+        self._bg_completed = 0
+        self._bg_failed = 0
 
     # ------------------------------------------------------------------ #
     # Lifecycle — all synchronous; the event loop is hidden in a thread.
@@ -219,6 +226,8 @@ class PulseAgent(Agent):
         self._inflight.clear()
         self._bg_tasks.clear()
         self._sema = None
+        self._bg_completed = 0
+        self._bg_failed = 0
 
     def is_running(self) -> bool:
         """True while the background tick loop is active."""
@@ -256,7 +265,21 @@ class PulseAgent(Agent):
         """Run exactly one beat synchronously, without starting the loop.
 
         Handy for cron-style one-shots and scripts. Don't mix with a running
-        background loop — use one or the other."""
+        background loop — use one or the other.
+
+        Raises ``RuntimeError`` if the background loop is live: ``tick()`` spins
+        a throwaway event loop and runs due tasks under a *per-call* semaphore
+        (see :meth:`_run_due`), which is independent of the loop-wide
+        ``max_concurrent_inbound`` gate the background loop enforces. Running
+        both at once would exceed the intended global concurrency cap and let
+        two tickers race over the same records, so refuse it. Use the loop's own
+        ticks (or stop it first)."""
+        if self.is_running():
+            raise RuntimeError(
+                f"PulseAgent {self.name!r} is already running its background loop; "
+                "do not call tick() concurrently. Use the running loop's ticks, "
+                "or call stop() first to drive ticks synchronously."
+            )
         return _run_sync(self.tick_once())
 
     # ------------------------------------------------------------------ #
@@ -346,9 +369,27 @@ class PulseAgent(Agent):
             else:
                 self._dispatch_due(due)
 
+        # Fold in terminal outcomes of background workers that finished since the
+        # last tick (background path only — ``_run_due`` already populates these
+        # inline). Draining the counters here makes each live-loop ``pulse.tick``
+        # carry the completed/failed counts for work that actually finished
+        # during the preceding interval.
+        if not await_due and (self._bg_completed or self._bg_failed):
+            report.completed += self._bg_completed
+            report.failed += self._bg_failed
+            self._bg_completed = 0
+            self._bg_failed = 0
+
         # Only emit when something happened — a quiet tick every ``tick_seconds``
         # would otherwise flood the Session of a long-running agent.
-        if report.drained or report.due or report.recovered or report.pruned:
+        if (
+            report.drained
+            or report.due
+            or report.recovered
+            or report.pruned
+            or report.completed
+            or report.failed
+        ):
             self._emit("pulse.tick", report.model_dump(mode="json"))
         return report
 
@@ -498,15 +539,28 @@ class PulseAgent(Agent):
     async def _run_one_bg(self, key: str, raw: dict[str, Any]) -> None:
         """Background wrapper around :meth:`_run_one`: bound by the loop-wide
         semaphore, mirrors ``_run_due``'s error reporting, and always clears the
-        in-flight marker so the key can be re-collected if its claim was lost."""
+        in-flight marker so the key can be re-collected if its claim was lost.
+
+        The terminal outcome is tallied onto ``_bg_completed`` / ``_bg_failed``
+        so the next emitted :class:`TickReport` reflects it — without this the
+        live loop's ``pulse.tick`` events would always show 0 completed/failed,
+        since dispatch returns before the worker finishes. Counting matches
+        ``_run_due``: ``completed`` increments completed; ``failed``/``rejected``
+        and any unexpected exception increment failed (a lost CAS, ``None``, is
+        neither — the record is owned by someone else)."""
         assert self._sema is not None  # set in _tick_loop before any dispatch
         try:
             async with self._sema:
-                await self._run_one(key, raw)
+                outcome = await self._run_one(key, raw)
+            if outcome == "completed":
+                self._bg_completed += 1
+            elif outcome in ("failed", "rejected"):
+                self._bg_failed += 1
         except asyncio.CancelledError:
             raise
         except Exception as exc:
             self._emit("pulse.run_error", {"error": f"{type(exc).__name__}: {exc}"})
+            self._bg_failed += 1
         finally:
             self._inflight.discard(key)
 

@@ -288,6 +288,72 @@ async def test_running_record_within_window_not_recovered() -> None:
     assert len(engine.calls) == 0
 
 
+async def test_background_tick_report_carries_terminal_counts() -> None:
+    # The background path (await_due=False) dispatches workers and returns before
+    # they finish, so the dispatching tick can't report their outcome. A later
+    # tick must fold in the terminal counts of workers that finished meanwhile,
+    # so live-loop pulse.tick events carry accurate completed/failed numbers.
+    import asyncio
+
+    clock = FakeClock()
+    store = Store()
+    engine = MockEngine(["a", "b"], raises=None)
+    pulse = PulseAgent(
+        unsafe_allow_all=True,
+        name="p",
+        engine=engine,
+        store=store,
+        clock=clock,
+        adapters=[MockAdapter([_msg("1"), _msg("2")])],
+    )
+    # _sema is normally bound in _tick_loop; bind it for the direct-dispatch test.
+    pulse._sema = asyncio.Semaphore(pulse._max_concurrent)
+
+    # Tick 1: intake + dispatch. Workers run as background tasks, so this tick
+    # reports them as due but not yet completed.
+    report1 = await pulse.tick_once(await_due=False)
+    assert report1.due == 2
+    assert report1.completed == 0  # not finished yet — dispatch returned early
+
+    # Let the dispatched workers finish.
+    if pulse._bg_tasks:
+        await asyncio.gather(*list(pulse._bg_tasks), return_exceptions=True)
+
+    # Tick 2: nothing new to do, but it folds in the two completions.
+    report2 = await pulse.tick_once(await_due=False)
+    assert report2.completed == 2
+    assert report2.failed == 0
+    # Counters are drained, so they aren't double-counted on a later tick.
+    report3 = await pulse.tick_once(await_due=False)
+    assert report3.completed == 0
+    assert all(r.status == "completed" for r in _records(store))
+
+
+async def test_background_tick_report_counts_failures() -> None:
+    import asyncio
+
+    clock = FakeClock()
+    store = Store()
+    engine = MockEngine([], raises=RuntimeError("boom"))
+    pulse = PulseAgent(
+        unsafe_allow_all=True,
+        name="p",
+        engine=engine,
+        store=store,
+        clock=clock,
+        adapters=[MockAdapter([_msg("1")])],
+    )
+    pulse._sema = asyncio.Semaphore(pulse._max_concurrent)
+
+    await pulse.tick_once(await_due=False)
+    if pulse._bg_tasks:
+        await asyncio.gather(*list(pulse._bg_tasks), return_exceptions=True)
+    report = await pulse.tick_once(await_due=False)
+    assert report.failed == 1
+    assert report.completed == 0
+    assert _records(store)[0].status == "failed"
+
+
 async def test_stale_after_is_configurable() -> None:
     clock = FakeClock()
     store = Store()

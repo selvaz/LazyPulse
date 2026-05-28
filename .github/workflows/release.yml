@@ -90,3 +90,7 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           packages-dir: dist/
+          # The first 0.1.0 upload is done manually; skip-existing makes a
+          # tag for an already-published version a graceful no-op instead of
+          # a hard duplicate-upload failure (also covers accidental re-tags).
+          skip-existing: true

@@ -58,6 +58,8 @@ site = ["mkdocs-material>=9.5,<10.0", "mkdocs-llmstxt>=0.3,<1.0", "pymdown-exten
 [project.urls]
 Homepage = "https://github.com/selvaz/LazyPulse"
 Repository = "https://github.com/selvaz/LazyPulse"
+Changelog = "https://github.com/selvaz/LazyPulse/blob/main/CHANGELOG.md"
+Issues = "https://github.com/selvaz/LazyPulse/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lazypulse"]

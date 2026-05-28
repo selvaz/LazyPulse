@@ -54,7 +54,7 @@ from lazypulse.models import (
 from lazypulse.policy import DEFAULT_ACTION_RULES, PulsePolicy
 from lazypulse.pulse_agent import PulseAgent
 from lazypulse.review import StoreReviewerUI, pending_reviews, respond
-from lazypulse.tasks import approve_task, pending_tasks, reject_task
+from lazypulse.tasks import approve_task, pending_tasks, purge_terminal_tasks, reject_task
 
 __version__ = "0.1.0"
 
@@ -131,6 +131,7 @@ __all__ = [
     "pending_tasks",
     "approve_task",
     "reject_task",
+    "purge_terminal_tasks",
     # Keys
     "store_keys",
 ]

@@ -6,8 +6,9 @@ contracts that are not expressed as imported symbols and would otherwise
 break silently when lazybridge changes within the allowed version range:
 
 1. A blocked ``Guard`` surfaces as an Envelope whose ``error.type`` is the
-   literal string ``"GuardBlocked"`` — ``PulseAgent._finalize`` keys on that
-   string to record the task as ``rejected`` rather than ``failed``.
+   literal string ``"GuardBlocked"`` — for **both** input and output blocks —
+   and ``PulseAgent._finalize`` keys on that string to record the task as
+   ``rejected`` rather than ``failed``.
 2. ``HumanEngine(ui=...)`` drives a custom UI via ``ui.prompt(task, *, tools,
    output_type)`` — the exact shape ``StoreReviewerUI`` reimplements.
 
@@ -46,6 +47,20 @@ def test_guard_block_surfaces_as_guardblocked_error_type() -> None:
     assert env.error.type == "GuardBlocked"
 
 
+def test_input_guard_block_surfaces_as_guardblocked_error_type() -> None:
+    # Symmetric with the output case: an *input* guard block must also produce
+    # env.error.type == "GuardBlocked" so _finalize records it as rejected.
+    # Input guards are where prompt-injection filters typically fire.
+    import asyncio
+
+    guard = ContentGuard(input_fn=lambda _text: GuardAction.block("blocked input"))
+    agent = Agent(name="guarded-in", engine=MockEngine(["hello"]), guard=guard)
+    env = asyncio.run(agent.run("do something"))
+    assert not env.ok
+    assert env.error is not None
+    assert env.error.type == "GuardBlocked"
+
+
 def test_pulse_agent_records_guard_block_as_rejected() -> None:
     # The end-to-end consequence of the contract above: a guard-blocked task
     # lands as ``rejected`` (a policy outcome), not ``failed`` (a crash).
@@ -57,6 +72,18 @@ def test_pulse_agent_records_guard_block_as_rejected() -> None:
     rec = _record_for(store, task_id)
     assert rec.status == "rejected"
     assert rec.error is not None and "nope" in rec.error
+
+
+def test_pulse_agent_records_input_guard_block_as_rejected() -> None:
+    # Same end-to-end guarantee for input-side blocks.
+    store = Store()
+    guard = ContentGuard(input_fn=lambda _text: GuardAction.block("nope-in"))
+    pulse = PulseAgent(name="ti", engine=MockEngine(["hello"]), store=store, guard=guard)
+    task_id = pulse.schedule("do something")
+    pulse.tick()
+    rec = _record_for(store, task_id)
+    assert rec.status == "rejected"
+    assert rec.error is not None and "nope-in" in rec.error
 
 
 def test_human_engine_drives_custom_ui_prompt_shape() -> None:

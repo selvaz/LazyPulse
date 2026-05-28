@@ -55,6 +55,10 @@ if TYPE_CHECKING:
 #: marked ``failed``. Prevents a poison task from being retried forever.
 _MAX_RESTARTS = 3
 
+#: Minimum wall-clock seconds between terminal-record prunes. Pruning scans the
+#: whole task space, so it runs at most this often rather than every tick.
+_PRUNE_INTERVAL = 60.0
+
 
 class PulseAgent(Agent):
     """Agent + tick loop + policy + adapters."""
@@ -67,6 +71,7 @@ class PulseAgent(Agent):
         tick_seconds: float = 1.0,
         max_concurrent_inbound: int = 4,
         stale_after: float | None = None,
+        terminal_retention: float | None = None,
         unsafe_allow_all: bool = False,
         clock: Callable[[], datetime] | None = None,
         **agent_kwargs: Any,
@@ -119,12 +124,28 @@ class PulseAgent(Agent):
         # pure-LLM agent); tune up if your review timeout exceeds 1 h.
         # See ``_recover_stale``.
         self._stale_after = stale_after if stale_after is not None else max(tick_seconds * 60, 3600.0)
+        # Opt-in retention: when set, terminal records (completed/rejected/
+        # failed) older than this many seconds are deleted during ticks so an
+        # always-on agent's Store does not grow without bound. ``None`` (default)
+        # keeps the full ledger forever — the historical behaviour.
+        self._terminal_retention = terminal_retention
+        self._last_prune_at: datetime | None = None
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         # The loop runs on its own event loop in a daemon thread, so user code
         # stays synchronous — no asyncio.run / await / async with required.
         self._thread: threading.Thread | None = None
         self._loop: asyncio.AbstractEventLoop | None = None
         self._tick_task: asyncio.Task[None] | None = None
+        # Background loop dispatch (see ``_tick_loop`` / ``_dispatch_due``): the
+        # tick loop spawns each due task as its own asyncio task instead of
+        # awaiting them inline, so a slow worker (or one parked in human review)
+        # never stalls intake, recovery, or other due work. ``_inflight`` holds
+        # the keys currently dispatched so a later tick doesn't re-collect them;
+        # ``_sema`` bounds total concurrency across ticks (bound to the loop in
+        # ``_tick_loop``); ``_bg_tasks`` keeps strong refs so tasks aren't GC'd.
+        self._inflight: set[str] = set()
+        self._bg_tasks: set[asyncio.Task[None]] = set()
+        self._sema: asyncio.Semaphore | None = None
 
     # ------------------------------------------------------------------ #
     # Lifecycle — all synchronous; the event loop is hidden in a thread.
@@ -148,11 +169,16 @@ class PulseAgent(Agent):
             try:
                 loop.run_forever()
             finally:
-                task = self._tick_task
-                if task is not None:
-                    task.cancel()
+                # Cancel the tick task and any still-running dispatched workers
+                # so the loop drains cleanly (no "Task was destroyed but it is
+                # pending" warnings). A worker cancelled mid-run leaves its
+                # record in ``running``; crash recovery resets it on restart.
+                pending = [t for t in (self._tick_task, *self._bg_tasks) if t is not None]
+                for t in pending:
+                    t.cancel()
+                if pending:
                     try:
-                        loop.run_until_complete(asyncio.gather(task, return_exceptions=True))
+                        loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
                     except RuntimeError:
                         pass
                 loop.close()
@@ -188,6 +214,11 @@ class PulseAgent(Agent):
         self._loop = None
         self._thread = None
         self._tick_task = None
+        # The loop thread has exited, so its background-dispatch state can be
+        # reset safely from here for a clean re-start.
+        self._inflight.clear()
+        self._bg_tasks.clear()
+        self._sema = None
 
     def is_running(self) -> bool:
         """True while the background tick loop is active."""
@@ -270,16 +301,26 @@ class PulseAgent(Agent):
     # ------------------------------------------------------------------ #
     # The tick
     # ------------------------------------------------------------------ #
-    async def tick_once(self) -> TickReport:
+    async def tick_once(self, *, await_due: bool = True) -> TickReport:
         """Execute a single beat. Exposed for deterministic testing.
 
-        Order matters: recover crashed tasks first, then intake new inbound
-        (which may become due immediately), then run everything due.
+        Order matters: recover crashed tasks first, prune old terminal records,
+        then intake new inbound (which may become due immediately), then run
+        everything due.
+
+        ``await_due`` controls how due tasks are executed. ``True`` (default)
+        runs them inline and waits for completion — the right behaviour for the
+        synchronous one-shot :meth:`tick` and for deterministic tests, where the
+        returned :class:`TickReport` must reflect terminal outcomes. The
+        background :meth:`_tick_loop` passes ``False`` so each due task is
+        dispatched as its own asyncio task and the loop keeps ticking; a slow or
+        human-review task then never stalls intake or recovery.
         """
         now = self._clock()
         report = TickReport(at=now)
 
         self._recover_stale(now, report)
+        self._prune_terminal(now, report)
 
         for msg in await self._drain_adapters():
             report.drained += 1
@@ -292,22 +333,34 @@ class PulseAgent(Agent):
                 )
 
         due = self._collect_due(now)
+        # Skip tasks already dispatched by an earlier tick (background mode):
+        # they are still ``scheduled`` until they win their CAS claim, so they
+        # would otherwise be collected again. The claim CAS makes a double
+        # dispatch harmless regardless, but filtering avoids the wasted work.
+        if self._inflight:
+            due = [(key, raw) for key, raw in due if key not in self._inflight]
         report.due = len(due)
         if due:
-            await self._run_due(due, report)
+            if await_due:
+                await self._run_due(due, report)
+            else:
+                self._dispatch_due(due)
 
         # Only emit when something happened — a quiet tick every ``tick_seconds``
         # would otherwise flood the Session of a long-running agent.
-        if report.drained or report.due or report.recovered:
+        if report.drained or report.due or report.recovered or report.pruned:
             self._emit("pulse.tick", report.model_dump(mode="json"))
         return report
 
     async def _tick_loop(self) -> None:
         """Loop forever until cancelled. An exception in a tick is logged to
         the Session but never escapes — the loop must outlive bad ticks."""
+        # Bound here so the semaphore binds to *this* loop (the one running the
+        # background ticks). Created per-loop-start, never carried across loops.
+        self._sema = asyncio.Semaphore(self._max_concurrent)
         while True:
             try:
-                await self.tick_once()
+                await self.tick_once(await_due=False)
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -423,6 +476,35 @@ class PulseAgent(Agent):
             elif outcome in ("failed", "rejected"):
                 report.failed += 1
 
+    def _dispatch_due(self, due: list[tuple[str, dict[str, Any]]]) -> None:
+        """Spawn each due task as its own background asyncio task (loop mode).
+
+        Concurrency is bounded by ``self._sema`` (acquired inside the task, so
+        dispatch returns immediately). The key is marked in-flight so a later
+        tick won't re-collect a task that is dispatched but not yet CAS-claimed.
+        Used only from :meth:`_tick_loop`; the loop keeps ticking while these
+        run, so a slow worker can't starve intake or recovery."""
+        for key, raw in due:
+            self._inflight.add(key)
+            task = asyncio.ensure_future(self._run_one_bg(key, raw))
+            self._bg_tasks.add(task)
+            task.add_done_callback(self._bg_tasks.discard)
+
+    async def _run_one_bg(self, key: str, raw: dict[str, Any]) -> None:
+        """Background wrapper around :meth:`_run_one`: bound by the loop-wide
+        semaphore, mirrors ``_run_due``'s error reporting, and always clears the
+        in-flight marker so the key can be re-collected if its claim was lost."""
+        assert self._sema is not None  # set in _tick_loop before any dispatch
+        try:
+            async with self._sema:
+                await self._run_one(key, raw)
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            self._emit("pulse.run_error", {"error": f"{type(exc).__name__}: {exc}"})
+        finally:
+            self._inflight.discard(key)
+
     async def _run_one(self, key: str, expected: dict[str, Any]) -> str | None:
         """Claim one scheduled record via CAS, run it, and persist the result.
 
@@ -510,6 +592,22 @@ class PulseAgent(Agent):
                 )
             if self.store is not None and self.store.compare_and_swap(key, raw, recovered.model_dump(mode="json")):
                 report.recovered += 1
+
+    def _prune_terminal(self, now: datetime, report: TickReport) -> None:
+        """Delete terminal records older than ``terminal_retention`` so an
+        always-on agent's Store does not grow without bound. No-op unless
+        ``terminal_retention=`` was set. Throttled to once per ``_PRUNE_INTERVAL``
+        seconds because it scans the whole task space."""
+        if self._terminal_retention is None or self.store is None:
+            return
+        if self._last_prune_at is not None and (now - self._last_prune_at).total_seconds() < _PRUNE_INTERVAL:
+            return
+        self._last_prune_at = now
+        from lazypulse.tasks import purge_terminal_tasks
+
+        report.pruned += purge_terminal_tasks(
+            self.store, older_than=timedelta(seconds=self._terminal_retention), now=now
+        )
 
     # ------------------------------------------------------------------ #
     # Helpers

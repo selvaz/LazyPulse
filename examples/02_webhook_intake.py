@@ -32,7 +32,7 @@ def main() -> None:
 
     pulse = PulseAgent(
         name="webhook-pulse",
-        engine=MockEngine(["handled"]),  # swap for LLMEngine("claude-opus-4-7")
+        engine=MockEngine(["handled"]),  # swap for LLMEngine("claude-opus-4-8")
         store=store,
         session=Session(),
         adapters=[adapter],

@@ -1,7 +1,7 @@
 """Minimal PulseAgent: a mock engine, a mock adapter — all synchronous.
 
 No asyncio, no await, no event loop to manage — same zero-boilerplate feel as
-lazybridge. Swap MockEngine for ``LLMEngine("claude-opus-4-7")`` and
+lazybridge. Swap MockEngine for ``LLMEngine("claude-opus-4-8")`` and
 MockAdapter for a real adapter to go live.
 
     python examples/01_minimal_pulse.py

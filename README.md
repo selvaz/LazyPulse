@@ -45,7 +45,7 @@ You'll also need an API key for whatever model your agent uses (e.g.
 ## 30-second example
 
 This runs as-is — no API key, no network — because it uses the bundled mocks.
-Swap `MockEngine` for `LLMEngine("claude-opus-4-7")` and `MockAdapter` for a
+Swap `MockEngine` for `LLMEngine("claude-opus-4-8")` and `MockAdapter` for a
 real one to go live.
 
 ```python
@@ -105,7 +105,7 @@ client = GmailClient.from_credentials(
 
 pulse = PulseAgent(
     name="inbox-assistant",
-    engine=LLMEngine("claude-opus-4-7", system="You triage and draft email replies."),
+    engine=LLMEngine("claude-opus-4-8", system="You triage and draft email replies."),
     tools=[GmailTools(client, allowed_recipients=[OWNER])],   # draft freely; send is gated
     store=Store(db="pulse.db"),         # persistent: survives restarts
     session=Session(),                  # observability
@@ -155,7 +155,8 @@ plus these:
 | `unsafe_allow_all=` | `False` | Opt out of requiring a policy — runs all inbound with full trust. Local dev only. |
 | `tick_seconds=` | `1.0` | How often the loop wakes up. |
 | `max_concurrent_inbound=` | `4` | Cap on tasks running at once. |
-| `stale_after=` | `max(tick*60, 300)` | A `running` task older than this is treated as crashed and retried. Raise it for slow workers. |
+| `stale_after=` | `max(tick*60, 3600)` | A `running` task older than this is treated as crashed and retried. Default is 1 h so slow LLM workers and tasks parked in human review (default review timeout 3600 s) are never falsely recovered. Tune down for fast pure-LLM agents. |
+| `terminal_retention=` | `None` | When set (seconds), terminal task records (`completed`/`rejected`/`failed`) older than this are pruned during ticks so an always-on agent's Store does not grow without bound. `None` keeps the full ledger forever. **Set this in production** (see below). |
 | `clock=` | UTC now | Inject a clock for deterministic tests. |
 
 Lifecycle control — all synchronous; the event loop is hidden in a background
@@ -190,6 +191,34 @@ pulse.schedule_at("send the weekly report", when=monday_9am)
 
 A `schedule`-only agent (no adapters) needs no policy. Combine with a small
 `tick_seconds` for reactive work, or a large one for cron-like jobs.
+
+### Bounding Store growth in production — `terminal_retention`
+
+Every task leaves a `PulseRecord` in the Store, and terminal records
+(`completed`/`rejected`/`failed`) are kept forever by default. For an always-on
+agent that means the ledger grows without bound, and because the per-tick scans
+(`_collect_due`, `_recover_stale`, recovery, pruning) walk the task keyspace,
+that growth eventually shows up as per-tick cost.
+
+Set `terminal_retention=` to an age (in seconds) so finished records are pruned
+during ticks once they age out:
+
+```python
+PulseAgent(
+    store=Store(db="pulse.db"),
+    terminal_retention=7 * 24 * 3600,   # keep a week of history, then prune
+    ...
+)
+```
+
+**Recommendation:** always set `terminal_retention` in production. Choose a
+window long enough for whatever auditing/observability you need (e.g. a few days
+to a week), but short enough to keep the ledger bounded. `None` (the default)
+preserves the full historical ledger and is fine for tests and short-lived runs.
+
+> Note: per-tick task lookups are currently O(N) over the task ledger, so
+> `terminal_retention` is the primary lever for keeping an always-on agent
+> healthy over time.
 
 ### PulsePolicy — who may ask for what
 

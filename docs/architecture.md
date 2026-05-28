@@ -7,7 +7,8 @@ itself up.** Everything else is reused.
 
 `PulseAgent` subclasses `lazybridge.Agent`. It does not wrap, proxy, or
 re-implement it. The constructor takes the new kwargs (`adapters`, `policy`,
-`tick_seconds`, `max_concurrent_inbound`, `clock`) and forwards everything
+`tick_seconds`, `max_concurrent_inbound`, `stale_after`, `terminal_retention`,
+`clock`) and forwards everything
 else to `super().__init__(**agent_kwargs)`. So a PulseAgent has the full
 Agent surface — `engine`, `tools`, `guard`, `verify`, `memory`, `store`,
 `session`, `output`, `sources`, `cache`, `fallback` — and every Agent
@@ -64,6 +65,27 @@ GmailInbox / Policy      adapters/gmail   polling + auth classification
 
 The background loop (`start()`) just calls `tick_once()` every
 `tick_seconds`, swallowing per-tick exceptions so the loop outlives bad ticks.
+
+## Bounding the ledger — `terminal_retention`
+
+Every task leaves a `PulseRecord` in the Store, and terminal records
+(`completed` / `rejected` / `failed`) are retained forever by default. The
+per-tick recovery, collection, and prune steps walk the task keyspace
+(currently O(N) over the ledger), so for an **always-on** agent the unbounded
+ledger is the main scaling cliff over time.
+
+`terminal_retention=<seconds>` makes the prune step delete finished records once
+they age out, keeping the ledger bounded:
+
+```python
+PulseAgent(store=Store(db="pulse.db"), terminal_retention=7 * 24 * 3600, ...)
+```
+
+**Set `terminal_retention` in production.** Pick a window long enough for the
+auditing/observability you need but short enough to keep the ledger bounded.
+`None` (the default) keeps the full history and is fine for tests and
+short-lived runs. The O(N) scan behaviour is a documented follow-up for a
+status-indexed key scheme.
 
 ## Why a policy is not a Guard, and an adapter is not a tool
 

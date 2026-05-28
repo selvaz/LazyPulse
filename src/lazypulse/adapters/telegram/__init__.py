@@ -2,9 +2,9 @@
 
 The inbound polling inbox and the identity-aware policy live here. The Telegram
 **client** and **tool** (``TelegramClient``, ``TelegramService``,
-``TelegramTools``, ``TelegramSendBlocked``) moved to the sibling ``lazytoolkit``
-package in 0.8 (``pip install 'lazytoolkit[telegram]'``). They remain importable
-from here via a lazy deprecation shim until 0.9.
+``TelegramTools``, ``TelegramSendBlocked``) were extracted to the sibling
+``lazytoolkit`` package (``pip install 'lazytoolkit[telegram]'``). They remain
+importable from here via a lazy deprecation shim that is removed in 0.2.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ __all__ = [
     "TelegramService",
 ]
 
-# Symbols moved to lazytools.connectors.telegram (0.8) — re-exported lazily.
+# Symbols extracted to lazytools.connectors.telegram — re-exported lazily.
 _MOVED = {
     "TelegramClient",
     "TelegramService",
@@ -45,8 +45,8 @@ _MOVED = {
 def __getattr__(name: str):  # PEP 562 — fires only for moved symbols
     if name in _MOVED:
         warnings.warn(
-            f"lazypulse.adapters.telegram.{name} moved to lazytools.connectors.telegram in 0.8; "
-            "install 'lazytoolkit' and import from there. This shim is removed in 0.9.",
+            f"lazypulse.adapters.telegram.{name} was extracted to lazytools.connectors.telegram; "
+            "install 'lazytoolkit' and import from there. This shim is removed in 0.2.",
             DeprecationWarning,
             stacklevel=2,
         )

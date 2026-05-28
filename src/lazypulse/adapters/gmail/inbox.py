@@ -38,7 +38,7 @@ class GmailInboxConfig:
     #: Only affects the reminder warning, not the API call format (which always
     #: uses ``format="metadata"`` + snippet). Set ``"readonly"`` to remind
     #: yourself that the OAuth scope you configured in
-    #: :meth:`~lazypulse.adapters.gmail.client.GmailClient.from_credentials`
+    #: :meth:`lazytools.connectors.gmail.GmailClient.from_credentials`
     #: is broader than strictly necessary; the agent still only reads headers
     #: and snippet. Prefer ``"metadata"`` in production.
     scope: Literal["metadata", "readonly"] = "metadata"

@@ -754,27 +754,42 @@ class PulseAgent(Agent):
             self.store.compare_and_swap(key, raw, rescheduled.model_dump(mode="json"))
 
     def _process_cron(self, now: datetime) -> None:
-        """Fire any cron jobs whose ``next_fire_at`` has passed."""
+        """Fire any cron jobs whose ``next_fire_at`` has passed.
+
+        The cron record is atomically advanced (CAS) *before* scheduling the
+        task so two agents sharing the same Store never produce duplicate task
+        instances for the same cron occurrence — only the process that wins
+        the CAS calls ``schedule()``.
+        """
         if self.store is None:
             return
-        if not hasattr(self.store, "items"):
-            return
-        for key, raw in self.store.items(prefix=store_keys.CRON_PREFIX):
+        if hasattr(self.store, "items"):
+            cron_items: list[tuple[str, Any]] = self.store.items(prefix=store_keys.CRON_PREFIX)
+        else:
+            cron_items = [
+                (key, self.store.read(key))
+                for key in list(self.store.keys())
+                if key.startswith(store_keys.CRON_PREFIX)
+            ]
+        for key, raw in cron_items:
             if not isinstance(raw, dict):
                 continue
             next_fire_at = _parse_dt(raw.get("next_fire_at"))
             if next_fire_at is None or next_fire_at > now:
                 continue
-            self.schedule(raw.get("text", ""), run_at=now)
             try:
                 from lazypulse.cron import CronTrigger
 
                 trigger = CronTrigger(raw["expr"], raw.get("tz", "UTC"))
                 next_dt = trigger.next(now)
                 updated = {**raw, "next_fire_at": next_dt.isoformat()}
-                self.store.compare_and_swap(key, raw, updated)
             except Exception:
-                pass
+                continue
+            # Claim this firing by advancing next_fire_at atomically.
+            # If the CAS fails another agent process already owns it — skip.
+            if not self.store.compare_and_swap(key, raw, updated):
+                continue
+            self.schedule(raw.get("text", ""), run_at=now)
 
     def _check_rate_limit(self, rate_key: str, max_count: int) -> bool:
         """CAS-increment the rate counter. Returns ``True`` if limit exceeded."""

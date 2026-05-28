@@ -35,6 +35,7 @@ def test_retry_integration() -> None:
     from datetime import UTC, datetime
 
     from lazybridge import Store
+
     from lazypulse import PulseAgent, store_keys
     from lazypulse.models import PulseRecord
     from lazypulse.retry import RetryPolicy
@@ -66,7 +67,7 @@ def test_retry_integration() -> None:
     report3 = agent.tick()
     assert report3.failed == 1
 
-    keys = [k for k in store.keys() if k.startswith(store_keys.TASK_PREFIX)]
+    keys = [k for k in store if k.startswith(store_keys.TASK_PREFIX)]
     assert len(keys) == 1
     record = PulseRecord.model_validate(store.read(keys[0]))
     assert record.status == "failed"

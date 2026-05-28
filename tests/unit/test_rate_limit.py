@@ -5,6 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 from lazybridge import Store
+
 from lazypulse import PulseAgent
 from lazypulse.models import Identity, InboundMessage, TickReport, TrustLevel
 from lazypulse.policy import PulsePolicy

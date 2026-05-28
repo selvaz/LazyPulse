@@ -12,7 +12,7 @@ class CronTrigger:
 
     def __init__(self, expr: str, tz: str = "UTC") -> None:
         try:
-            import croniter as _croniter  # noqa: F401
+            import croniter as _croniter  # type: ignore[import-untyped]  # noqa: F401
         except ImportError as exc:
             raise ImportError("CronTrigger requires the 'cron' extra: pip install 'lazypulse[cron]'") from exc
         try:
@@ -22,13 +22,13 @@ class CronTrigger:
         except KeyError as exc:
             raise ValueError(f"Unknown timezone: {tz!r}") from exc
         self._expr = expr
-        import croniter
+        import croniter  # type: ignore[import-untyped]
 
         croniter.croniter(expr, datetime.now(UTC))  # validate expression
 
     def next(self, after: datetime) -> datetime:
         """Return the next fire time after ``after``, as a UTC-aware datetime."""
-        import croniter
+        import croniter  # type: ignore[import-untyped]
 
         if after.tzinfo is None:
             after = after.replace(tzinfo=UTC)

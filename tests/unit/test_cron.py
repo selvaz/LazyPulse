@@ -38,6 +38,7 @@ def test_schedule_cron_fires_on_tick() -> None:
     from datetime import UTC, datetime
 
     from lazybridge import Store
+
     from lazypulse import PulseAgent
     from lazypulse.testing import FakeClock, MockEngine
 

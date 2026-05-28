@@ -672,6 +672,17 @@ class PulseAgent(Agent):
     # Helpers
     # ------------------------------------------------------------------ #
     def _scan_records(self) -> list[tuple[str, dict[str, Any]]]:
+        # SCALING NOTE: this is an O(N) full scan over the task ledger, and it
+        # runs every tick (via _collect_due and _recover_stale). For an
+        # always-on agent the main lever to keep N (and therefore per-tick cost)
+        # bounded is ``terminal_retention=`` (see _prune_terminal and the README
+        # / docs/architecture.md "Bounding the ledger" section). A status-indexed
+        # secondary key scheme (scheduled/running id sets) would avoid the full
+        # scan, but maintaining that index atomically alongside the single-key
+        # CAS lifecycle — across multiple processes sharing one Store and the
+        # external tasks.approve_task / reject_task mutators — is not safe with
+        # lazybridge's single-key compare_and_swap. Left as a documented
+        # follow-up; do not add a non-atomic index that can drift from the CAS.
         if self.store is None:
             return []
         out: list[tuple[str, dict[str, Any]]] = []

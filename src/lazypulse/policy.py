@@ -23,6 +23,7 @@ from lazypulse.models import (
     PolicyDecision,
     TrustLevel,
 )
+from lazypulse.ratelimit import RateLimit
 
 # Re-exported for convenience: ``from lazypulse.policy import TrustLevel`` works
 # as well as importing from ``lazypulse.models``.
@@ -32,6 +33,7 @@ __all__ = [
     "Identity",
     "PolicyDecision",
     "PulsePolicy",
+    "RateLimit",
     "TrustLevel",
 ]
 
@@ -74,6 +76,7 @@ class PulsePolicy(BaseModel):
     action_rules: dict[TrustLevel, set[ActionClass]] = Field(
         default_factory=lambda: {k: set(v) for k, v in DEFAULT_ACTION_RULES.items()}
     )
+    rate_limit: RateLimit | None = None
 
     def classify(self, inbound: InboundMessage) -> Identity:
         """Resolve the sender's identity. Override in adapter subclasses."""

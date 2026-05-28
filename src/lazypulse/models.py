@@ -124,6 +124,12 @@ class PulseRecord(BaseModel):
     worker_text: str | None = None
     cost_usd: float = 0.0
     error: str | None = None
+    # v0.2 fields — all default so v0.1 JSON deserialises cleanly.
+    attempt: int = 0
+    next_retry_at: datetime | None = None
+    rate_limited: bool = False
+    route: str | None = None
+    error_type: str | None = None
 
 
 class TickReport(BaseModel):

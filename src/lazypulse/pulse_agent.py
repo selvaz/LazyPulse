@@ -404,11 +404,16 @@ class PulseAgent(Agent):
 
         identity, decision = self._authorize(msg)
         status, tally = _status_for_decision(decision)
+        # A policy REJECT lands as terminal on first write; stamp completed_at
+        # so terminal_retention can age it out. Without this, a spam-heavy
+        # adapter would grow the ledger unbounded despite retention.
+        completed_at = now if status == "rejected" else None
         record = PulseRecord(
             text=msg.text,
             status=status,
             created_at=now,
             run_at=now,
+            completed_at=completed_at,
             source_event_id=msg.message_id,
             source=msg.source,
             inbound_metadata=msg.metadata,

@@ -84,6 +84,55 @@ async def test_pulse_agent_prunes_terminal_records_when_retention_set() -> None:
     assert store.read(store_keys.task_key(old.task_id)) is None
 
 
+async def test_policy_rejected_intake_records_get_purged() -> None:
+    # A policy REJECT lands as terminal on first write — the record must carry
+    # completed_at so terminal_retention can age it out. Regression: previously
+    # _intake left completed_at=None on the reject path, so spammy adapters
+    # grew the ledger unbounded despite retention being enabled.
+    from lazypulse.models import InboundMessage, PolicyDecision
+    from lazypulse.policy import PulsePolicy
+    from lazypulse.testing import FakeClock
+
+    class _RejectAll(PulsePolicy):
+        def classify(self, msg):  # type: ignore[override]
+            from lazypulse.models import Identity, TrustLevel
+            return Identity(sender=msg.sender_raw, trust=TrustLevel.UNKNOWN)
+
+        def authorize(self, identity, action):  # type: ignore[override]
+            return PolicyDecision.REJECT
+
+    clock = FakeClock()
+    store = Store()
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["x"]),
+        store=store,
+        clock=clock,
+        policy=_RejectAll(),
+        terminal_retention=3600,
+    )
+    from lazypulse.models import TickReport
+    pulse._intake(
+        InboundMessage(
+            source="test",
+            message_id="m1",
+            received_at=clock.now,
+            text="spam",
+            sender_raw="x",
+        ),
+        clock.now,
+        report=TickReport(at=clock.now),
+    )
+    clock.advance(7200)
+    report = await pulse.tick_once()
+
+    assert report.pruned == 1
+    assert list(store.keys()) == [
+        # only the EVENT dedupe marker survives (intentional: prevents replay)
+        store_keys.event_key("m1"),
+    ]
+
+
 async def test_pulse_agent_keeps_records_without_retention() -> None:
     clock = FakeClock()
     store = Store()

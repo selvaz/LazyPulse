@@ -23,9 +23,9 @@ class Triage(BaseModel):
     confidence: float
 
 triager   = Agent(name="triager",   engine=LLMEngine("claude-haiku-4-5"), output=Triage)
-research  = Agent(name="research",  engine=LLMEngine("claude-opus-4-7"), tools=[web_search])
-calendar  = Agent(name="calendar",  engine=LLMEngine("claude-opus-4-7"), tools=[calendar_tools])
-draft_reply = Agent(name="draft_reply", engine=LLMEngine("claude-opus-4-7"))
+research  = Agent(name="research",  engine=LLMEngine("claude-opus-4-8"), tools=[web_search])
+calendar  = Agent(name="calendar",  engine=LLMEngine("claude-opus-4-8"), tools=[calendar_tools])
+draft_reply = Agent(name="draft_reply", engine=LLMEngine("claude-opus-4-8"))
 
 pulse = PulseAgent(
     name="router",

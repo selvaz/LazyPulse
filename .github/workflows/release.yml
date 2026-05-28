@@ -1,0 +1,96 @@
+name: release
+
+# Publish to PyPI on a version tag (``v0.1.0`` etc.) via PyPI Trusted
+# Publishing (OIDC) — no API token in repo secrets.
+#
+# One-off PyPI setup (Project → Publishing → add a GitHub Actions publisher;
+# use a *pending* publisher if the project doesn't exist yet):
+#   Owner: selvaz · Repository: LazyPulse · Workflow: release.yml · Environment: pypi
+#
+# The first 0.1.0 upload is done manually with twine (lazytoolkit is not on PyPI
+# yet, so the test job below installs it from git); this workflow handles every
+# subsequent tagged release.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          # lazytoolkit is not on PyPI yet; install the sibling from the public
+          # LazyTools repo, pinned to the same commit the other workflows use.
+          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@f1f0f2de8c36b72bf7066dbcdb6134726c718e3b"
+          pip install -e ".[dev]"
+      - name: Ruff
+        run: ruff check src tests
+      - name: Mypy
+        run: mypy src/lazypulse
+      - name: Pytest
+        run: pytest -q
+
+  build:
+    name: build sdist + wheel
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF##*/}"
+          TAG_VERSION="${TAG#v}"
+          PKG_VERSION=$(python -c "import tomllib, pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          if [ "${TAG_VERSION}" != "${PKG_VERSION}" ]; then
+            echo "tag ${TAG_VERSION} does not match pyproject version ${PKG_VERSION}"
+            exit 1
+          fi
+      - name: Build sdist + wheel
+        run: |
+          python -m pip install --upgrade pip build
+          python -m build
+      - name: Upload distribution artefacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+  publish:
+    name: publish to PyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/lazypulse
+    permissions:
+      id-token: write  # required for PyPI Trusted Publishing (OIDC)
+    steps:
+      - name: Download distribution artefacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist/
+          # The first 0.1.0 upload is done manually; skip-existing makes a
+          # tag for an already-published version a graceful no-op instead of
+          # a hard duplicate-upload failure (also covers accidental re-tags).
+          skip-existing: true

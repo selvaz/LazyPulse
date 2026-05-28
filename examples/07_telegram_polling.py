@@ -37,7 +37,7 @@ client = TelegramClient.from_token(TOKEN)
 
 pulse = PulseAgent(
     name="tg-assistant",
-    engine=LLMEngine("claude-opus-4-7", system="You are a concise personal assistant. Reply directly to the user."),
+    engine=LLMEngine("claude-opus-4-8", system="You are a concise personal assistant. Reply directly to the user."),
     store=Store(db="pulse.db"),                       # persistent: survives restarts
     policy=TelegramPolicy(owner_ids=[OWNER_ID]),      # only the verified owner acts
     # TelegramInbox is a Responder: each tick it polls for messages, and when

@@ -38,7 +38,7 @@ def main() -> None:
 
     pulse = PulseAgent(
         name="gmail-pulse",
-        engine=LLMEngine("claude-opus-4-7", system="You are a careful inbox assistant."),
+        engine=LLMEngine("claude-opus-4-8", system="You are a careful inbox assistant."),
         store=Store(db="pulse.db"),  # persistent so lifecycle survives restarts
         session=Session(),
         policy=GmailPolicy(owner_emails=[OWNER]),

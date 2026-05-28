@@ -28,19 +28,19 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# NOTE: the gmail/telegram extras depend on ``lazytoolkit`` (where the moved
-# clients/tools live). Those installs require ``lazytoolkit`` to be resolvable
+# NOTE: the gmail/telegram extras depend on ``lazytoolkit`` (where the
+# extracted clients/tools live). Those installs require ``lazytoolkit`` to be resolvable
 # by pip — i.e. once it is published to PyPI. Until then, install it from the
 # repo first (``pip install "lazytoolkit[gmail] @ git+https://github.com/selvaz/LazyTools.git@<sha>"``).
 # HTTP intake adapter (WebhookAdapter). Kept optional so the core install
 # stays dependency-light for users who only poll Gmail or use custom adapters.
 webhook = ["starlette>=0.37,<1.0", "uvicorn>=0.29,<1.0"]
-# Gmail polling inbox + the moved client/tools. The Gmail client + guarded
-# draft/send tools live in lazytoolkit since 0.8; this extra pulls them (and
-# their Google client libraries) so ``pip install lazypulse`` stays light.
+# Gmail polling inbox + the extracted client/tools. The Gmail client + guarded
+# draft/send tools live in lazytoolkit; this extra pulls them (and their Google
+# client libraries) so ``pip install lazypulse`` stays light.
 gmail = ["lazytoolkit[gmail]>=0.1.0,<0.2.0"]
-# Telegram polling inbox + the moved client/tool. The Telegram client + send
-# tool live in lazytoolkit since 0.8; this extra pulls them (and httpx).
+# Telegram polling inbox + the extracted client/tool. The Telegram client + send
+# tool live in lazytoolkit; this extra pulls them (and httpx).
 telegram = ["lazytoolkit[telegram]>=0.1.0,<0.2.0"]
 dev = [
     "pytest>=7.0",
@@ -58,6 +58,8 @@ site = ["mkdocs-material>=9.5,<10.0", "mkdocs-llmstxt>=0.3,<1.0", "pymdown-exten
 [project.urls]
 Homepage = "https://github.com/selvaz/LazyPulse"
 Repository = "https://github.com/selvaz/LazyPulse"
+Changelog = "https://github.com/selvaz/LazyPulse/blob/main/CHANGELOG.md"
+Issues = "https://github.com/selvaz/LazyPulse/issues"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/lazypulse"]

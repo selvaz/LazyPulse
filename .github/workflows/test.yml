@@ -28,7 +28,9 @@ jobs:
           pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@f1f0f2de8c36b72bf7066dbcdb6134726c718e3b"
           pip install -e ".[dev]"
       - name: Pytest
-        run: pytest -q
+        # Enforce a coverage floor (current coverage ~91%; floor set just below
+        # to catch regressions without churn). Raise as coverage improves.
+        run: pytest -q --cov=lazypulse --cov-report=term-missing --cov-fail-under=88
 
   quality:
     runs-on: ubuntu-latest

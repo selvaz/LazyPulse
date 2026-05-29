@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lazypulse"
-version = "0.1.0"
+version = "0.2.0"
 description = "Always-on agents: a tick loop, a trust policy, and inbound adapters on top of lazybridge."
 readme = "README.md"
 license = { text = "Apache-2.0" }
@@ -31,17 +31,16 @@ dependencies = [
 # NOTE: the gmail/telegram extras depend on ``lazytoolkit`` (where the
 # extracted clients/tools live). Those installs require ``lazytoolkit`` to be resolvable
 # by pip — i.e. once it is published to PyPI. Until then, install it from the
-# repo first (``pip install "lazytoolkit[gmail] @ git+https://github.com/selvaz/LazyTools.git@<sha>"``).
+# repo first (``pip install "lazytoolkit[gmail] @ git+https://github.com/selvaz/LazyTools.git@<sha>"``)
 # HTTP intake adapter (WebhookAdapter). Kept optional so the core install
 # stays dependency-light for users who only poll Gmail or use custom adapters.
 webhook = ["starlette>=0.37,<1.0", "uvicorn>=0.29,<1.0"]
-# Gmail polling inbox + the extracted client/tools. The Gmail client + guarded
-# draft/send tools live in lazytoolkit; this extra pulls them (and their Google
-# client libraries) so ``pip install lazypulse`` stays light.
+# Gmail polling inbox + the extracted client/tools.
 gmail = ["lazytoolkit[gmail]>=0.1.0,<0.2.0"]
-# Telegram polling inbox + the extracted client/tool. The Telegram client + send
-# tool live in lazytoolkit; this extra pulls them (and httpx).
+# Telegram polling inbox + the extracted client/tool.
 telegram = ["lazytoolkit[telegram]>=0.1.0,<0.2.0"]
+# Cron-expression based scheduling (CronTrigger / schedule_cron).
+cron = ["croniter>=1.3,<2.0"]
 dev = [
     "pytest>=7.0",
     "pytest-asyncio>=0.23",
@@ -51,6 +50,7 @@ dev = [
     "lazytoolkit>=0.1.0,<0.2.0",
     "ruff>=0.6",
     "mypy>=1.10",
+    "croniter>=1.3,<2.0",
 ]
 # Documentation-site build (mkdocs → GitHub Pages).
 site = ["mkdocs-material>=9.5,<10.0", "mkdocs-llmstxt>=0.3,<1.0", "pymdown-extensions>=10.0,<11.0"]

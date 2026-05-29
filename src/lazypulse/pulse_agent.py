@@ -42,6 +42,7 @@ from lazypulse.models import (
     TickReport,
     TrustLevel,
 )
+from lazypulse.retry import RetryPolicy
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterator
@@ -74,6 +75,7 @@ class PulseAgent(Agent):
         terminal_retention: float | None = None,
         unsafe_allow_all: bool = False,
         clock: Callable[[], datetime] | None = None,
+        retry_policy: RetryPolicy | None = None,
         **agent_kwargs: Any,
     ) -> None:
         # Risk note: super().__init__ MUST run first. Agent.__init__ registers
@@ -131,6 +133,7 @@ class PulseAgent(Agent):
         self._terminal_retention = terminal_retention
         self._last_prune_at: datetime | None = None
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
+        self._retry_policy = retry_policy
         # The loop runs on its own event loop in a daemon thread, so user code
         # stays synchronous — no asyncio.run / await / async with required.
         self._thread: threading.Thread | None = None
@@ -321,6 +324,32 @@ class PulseAgent(Agent):
         """Schedule a task to run at the absolute time ``when``. Returns its ``task_id``."""
         return self.schedule(text, run_at=when, **kwargs)
 
+    def schedule_cron(self, text: str, cron: str, tz: str = "UTC") -> str:
+        """Register a recurring cron task. Returns the ``cron_id``.
+
+        Requires the ``cron`` extra (``pip install 'lazypulse[cron]'``).
+        """
+        from lazypulse.cron import CronTrigger
+
+        trigger = CronTrigger(cron, tz)
+        now = self._clock()
+        next_dt = trigger.next(now)
+        cron_id = str(uuid.uuid4())
+        key = store_keys.CRON.format(cron_id=cron_id)
+        assert self.store is not None
+        self.store.write(
+            key,
+            {
+                "cron_id": cron_id,
+                "text": text,
+                "expr": cron,
+                "tz": tz,
+                "next_fire_at": next_dt.isoformat(),
+                "created_at": now.isoformat(),
+            },
+        )
+        return cron_id
+
     # ------------------------------------------------------------------ #
     # The tick
     # ------------------------------------------------------------------ #
@@ -328,8 +357,8 @@ class PulseAgent(Agent):
         """Execute a single beat. Exposed for deterministic testing.
 
         Order matters: recover crashed tasks first, prune old terminal records,
-        then intake new inbound (which may become due immediately), then run
-        everything due.
+        then process cron jobs and due retries, then intake new inbound (which
+        may become due immediately), then run everything due.
 
         ``await_due`` controls how due tasks are executed. ``True`` (default)
         runs them inline and waits for completion — the right behaviour for the
@@ -344,6 +373,8 @@ class PulseAgent(Agent):
 
         self._recover_stale(now, report)
         self._prune_terminal(now, report)
+        self._process_cron(now)
+        self._reschedule_due_retries(now, report)
 
         for msg in await self._drain_adapters():
             report.drained += 1
@@ -444,6 +475,18 @@ class PulseAgent(Agent):
             return
 
         identity, decision = self._authorize(msg)
+
+        # Per-sender rate limiting: only applied to messages the policy would ALLOW.
+        rate_limited = False
+        if decision == PolicyDecision.ALLOW and self._policy is not None and self._policy.rate_limit is not None:
+            rl = self._policy.rate_limit
+            sender = msg.sender_raw or "anonymous"
+            window_bucket = int(now.timestamp()) // rl.window_seconds
+            rate_key = store_keys.RATE_KEY.format(sender=sender, window_bucket=window_bucket)
+            rate_limited = self._check_rate_limit(rate_key, rl.max_per_sender)
+            if rate_limited:
+                decision = PolicyDecision.REJECT if rl.on_exceeded == "reject" else PolicyDecision.QUEUE_FOR_REVIEW
+
         status, tally = _status_for_decision(decision)
         # A policy REJECT lands as terminal on first write; stamp completed_at
         # so terminal_retention can age it out. Without this, a spam-heavy
@@ -461,6 +504,7 @@ class PulseAgent(Agent):
             identity=identity,
             action_class=msg.requested_action,
             decision=decision,
+            rate_limited=rate_limited,
         )
         self._write_record(record)
         setattr(report, tally, getattr(report, tally) + 1)
@@ -539,15 +583,7 @@ class PulseAgent(Agent):
     async def _run_one_bg(self, key: str, raw: dict[str, Any]) -> None:
         """Background wrapper around :meth:`_run_one`: bound by the loop-wide
         semaphore, mirrors ``_run_due``'s error reporting, and always clears the
-        in-flight marker so the key can be re-collected if its claim was lost.
-
-        The terminal outcome is tallied onto ``_bg_completed`` / ``_bg_failed``
-        so the next emitted :class:`TickReport` reflects it — without this the
-        live loop's ``pulse.tick`` events would always show 0 completed/failed,
-        since dispatch returns before the worker finishes. Counting matches
-        ``_run_due``: ``completed`` increments completed; ``failed``/``rejected``
-        and any unexpected exception increment failed (a lost CAS, ``None``, is
-        neither — the record is owned by someone else)."""
+        in-flight marker so the key can be re-collected if its claim was lost."""
         assert self._sema is not None  # set in _tick_loop before any dispatch
         try:
             async with self._sema:
@@ -591,11 +627,35 @@ class PulseAgent(Agent):
         try:
             env = await self.run(started.text)
         except Exception as exc:
+            error_type = type(exc).__name__
+            will_retry = self._retry_policy is not None and self._retry_policy.should_retry(started.attempt, exc)
+            next_retry_at_val = None
+            if will_retry:
+                delay = self._retry_policy.next_delay(started.attempt)  # type: ignore[union-attr]
+                next_retry_at_val = self._clock() + timedelta(seconds=delay)
             final = started.model_copy(
-                update={"status": "failed", "completed_at": self._clock(), "error": f"{type(exc).__name__}: {exc}"}
+                update={
+                    "status": "failed",
+                    "completed_at": None if will_retry else self._clock(),
+                    "error": f"{type(exc).__name__}: {exc}",
+                    "error_type": error_type,
+                    "next_retry_at": next_retry_at_val,
+                }
             )
         else:
             final = _finalize(started, env, self._clock())
+            if final.status == "failed" and self._retry_policy is not None and self._retry_policy.should_retry_by_count(started.attempt):
+                delay = self._retry_policy.next_delay(started.attempt)
+                now_ts = self._clock()
+                err_obj = getattr(env, "error", None)
+                err_type = getattr(err_obj, "type", "engine_error") if err_obj else "engine_error"
+                final = final.model_copy(
+                    update={
+                        "completed_at": None,
+                        "next_retry_at": now_ts + timedelta(seconds=delay),
+                        "error_type": err_type,
+                    }
+                )
         finally:
             active_task_id.reset(token)
 
@@ -668,23 +728,94 @@ class PulseAgent(Agent):
             self.store, older_than=timedelta(seconds=self._terminal_retention), now=now
         )
 
+    def _reschedule_due_retries(self, now: datetime, report: TickReport) -> None:
+        """Re-schedule failed records whose ``next_retry_at`` has passed."""
+        if self._retry_policy is None or self.store is None:
+            return
+        for key, raw in self._scan_records():
+            if raw.get("status") != "failed":
+                continue
+            attempt = int(raw.get("attempt", 0))
+            if attempt >= self._retry_policy.max_attempts - 1:
+                continue
+            next_retry_at = _parse_dt(raw.get("next_retry_at"))
+            if next_retry_at is None or next_retry_at > now:
+                continue
+            rescheduled = PulseRecord.model_validate(raw).model_copy(
+                update={
+                    "status": "scheduled",
+                    "started_at": None,
+                    "run_at": now,
+                    "attempt": attempt + 1,
+                    "next_retry_at": None,
+                    "completed_at": None,
+                }
+            )
+            self.store.compare_and_swap(key, raw, rescheduled.model_dump(mode="json"))
+
+    def _process_cron(self, now: datetime) -> None:
+        """Fire any cron jobs whose ``next_fire_at`` has passed.
+
+        The cron record is atomically advanced (CAS) *before* scheduling the
+        task so two agents sharing the same Store never produce duplicate task
+        instances for the same cron occurrence — only the process that wins
+        the CAS calls ``schedule()``.
+        """
+        if self.store is None:
+            return
+        if hasattr(self.store, "items"):
+            cron_items: list[tuple[str, Any]] = self.store.items(prefix=store_keys.CRON_PREFIX)
+        else:
+            cron_items = [
+                (key, self.store.read(key))
+                for key in list(self.store.keys())
+                if key.startswith(store_keys.CRON_PREFIX)
+            ]
+        for key, raw in cron_items:
+            if not isinstance(raw, dict):
+                continue
+            next_fire_at = _parse_dt(raw.get("next_fire_at"))
+            if next_fire_at is None or next_fire_at > now:
+                continue
+            try:
+                from lazypulse.cron import CronTrigger
+
+                trigger = CronTrigger(raw["expr"], raw.get("tz", "UTC"))
+                next_dt = trigger.next(now)
+                updated = {**raw, "next_fire_at": next_dt.isoformat()}
+            except Exception:
+                continue
+            # Claim this firing by advancing next_fire_at atomically.
+            # If the CAS fails another agent process already owns it — skip.
+            if not self.store.compare_and_swap(key, raw, updated):
+                continue
+            self.schedule(raw.get("text", ""), run_at=now)
+
+    def _check_rate_limit(self, rate_key: str, max_count: int) -> bool:
+        """CAS-increment the rate counter. Returns ``True`` if limit exceeded."""
+        assert self.store is not None
+        for _ in range(10):
+            current = self.store.read(rate_key)
+            count = int(current.get("count", 0)) if isinstance(current, dict) else 0
+            if count >= max_count:
+                return True
+            new_val = {"count": count + 1}
+            if self.store.compare_and_swap(rate_key, current, new_val):
+                return False
+        return True  # CAS kept losing — treat as exceeded
+
     # ------------------------------------------------------------------ #
     # Helpers
     # ------------------------------------------------------------------ #
     def _scan_records(self) -> list[tuple[str, dict[str, Any]]]:
-        # SCALING NOTE: this is an O(N) full scan over the task ledger, and it
-        # runs every tick (via _collect_due and _recover_stale). For an
-        # always-on agent the main lever to keep N (and therefore per-tick cost)
-        # bounded is ``terminal_retention=`` (see _prune_terminal and the README
-        # / docs/architecture.md "Bounding the ledger" section). A status-indexed
-        # secondary key scheme (scheduled/running id sets) would avoid the full
-        # scan, but maintaining that index atomically alongside the single-key
-        # CAS lifecycle — across multiple processes sharing one Store and the
-        # external tasks.approve_task / reject_task mutators — is not safe with
-        # lazybridge's single-key compare_and_swap. Left as a documented
-        # follow-up; do not add a non-atomic index that can drift from the CAS.
+        # Uses an indexed B-tree range scan via Store.items(prefix=TASK_PREFIX)
+        # when the store supports it (LazyBridge >= 0.9.1), giving O(M) in the
+        # number of matching task keys rather than O(N) total keyspace.
         if self.store is None:
             return []
+        if hasattr(self.store, "items"):
+            return [(k, v) for k, v in self.store.items(prefix=store_keys.TASK_PREFIX) if isinstance(v, dict)]
+        # Legacy fallback for stores without items(prefix=).
         out: list[tuple[str, dict[str, Any]]] = []
         for key in list(self.store.keys()):
             if not key.startswith(store_keys.TASK_PREFIX):

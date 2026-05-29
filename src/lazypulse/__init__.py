@@ -53,10 +53,12 @@ from lazypulse.models import (
 )
 from lazypulse.policy import DEFAULT_ACTION_RULES, PulsePolicy
 from lazypulse.pulse_agent import PulseAgent
+from lazypulse.ratelimit import RateLimit
+from lazypulse.retry import RetryPolicy
 from lazypulse.review import StoreReviewerUI, pending_reviews, respond
 from lazypulse.tasks import approve_task, pending_tasks, purge_terminal_tasks, reject_task
 
-__version__ = "0.1.0"
+__version__ = "0.2.0"
 
 if TYPE_CHECKING:
     from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy, GmailTools
@@ -67,6 +69,7 @@ if TYPE_CHECKING:
         TelegramTools,
     )
     from lazypulse.adapters.webhook import WebhookAdapter
+    from lazypulse.cron import CronTrigger
 
 # Symbols served lazily by ``__getattr__`` so importing them does not force
 # the optional extra to be installed unless the user actually reaches for it.
@@ -80,6 +83,7 @@ _LAZY: dict[str, tuple[str, str]] = {
     "TelegramInboxConfig": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramPolicy": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramTools": ("lazypulse.adapters.telegram", "telegram"),
+    "CronTrigger": ("lazypulse.cron", "cron"),
 }
 
 
@@ -112,6 +116,10 @@ __all__ = [
     "InboundMessage",
     "PulseRecord",
     "TickReport",
+    # Retry / cron / rate-limit
+    "RetryPolicy",
+    "CronTrigger",
+    "RateLimit",
     # Adapters
     "Adapter",
     "WebhookAdapter",

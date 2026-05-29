@@ -45,6 +45,14 @@ TASK_PREFIX = "pulse:task:"
 #: Prefix used to enumerate pending review requests (derived from REVIEW_REQ).
 REVIEW_REQ_PREFIX = "pulse:review:req:"
 
+#: Recurring cron job records.
+CRON = "pulse:cron:{cron_id}"
+CRON_PREFIX = "pulse:cron:"
+
+#: Per-sender rate-limit counter (window-bucketed).
+RATE_KEY = "pulse:rate:{sender}:{window_bucket}"
+RATE_PREFIX = "pulse:rate:"
+
 
 def task_key(task_id: str) -> str:
     return TASK.format(task_id=task_id)

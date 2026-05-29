@@ -5,6 +5,42 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [0.2.0] — 2026-05-28
+
+### Added
+- **`RetryPolicy`** — exponential backoff retry with configurable `max_attempts`,
+  `backoff_base`, `backoff_max`, and `retry_on` exception filter. Import from
+  `lazypulse` or `lazypulse.retry`. Set `retry_policy=RetryPolicy(...)` on
+  `PulseAgent` to enable automatic retries.
+- **`CronTrigger`** — cron-expression based recurring trigger (requires
+  `pip install 'lazypulse[cron]'`). Use `PulseAgent.schedule_cron(text, expr)`
+  to register a recurring task; the tick loop fires it on schedule and advances
+  the next fire time atomically via CAS.
+- **`RateLimit`** — per-sender rate limit on inbound intake. Set
+  `PulsePolicy(rate_limit=RateLimit(max_per_sender=10, window_seconds=3600,
+  on_exceeded="reject"))` to reject or queue messages from high-volume senders.
+  Uses a CAS-based window counter keyed by `pulse:rate:{sender}:{bucket}`.
+- **`PulseRecord` schema evolution** — five new fields with defaults so v0.1
+  JSON round-trips cleanly under the v0.2 model:
+  `attempt`, `next_retry_at`, `rate_limited`, `route`, `error_type`.
+- **`Store.items(prefix=)` integration** — `_scan_records` now uses an indexed
+  B-tree range scan (`store.items(prefix="pulse:task:")`) when the store
+  supports it (lazybridge ≥ 0.9.1), replacing the O(N+1) loop.
+- **`store_keys.CRON` / `CRON_PREFIX`** — key templates for cron job records.
+- **`store_keys.RATE_KEY` / `RATE_PREFIX`** — key templates for rate-limit counters.
+
+### Changed
+- Minimum `lazybridge` pin raised to `>=0.9.1` (requires `Store.items(prefix=)`).
+- `__version__` bumped to `"0.2.0"`.
+- `PulsePolicy` gains an optional `rate_limit: RateLimit | None = None` field.
+- `tick_once` now calls `_process_cron` and `_reschedule_due_retries` before
+  intake, so cron jobs and retries are handled every beat.
+
+### Deprecated (shims removed in 0.3)
+- None.
+
+---
+
 ## [0.1.0] — first release
 
 First tagged release of LazyPulse: an always-on orchestration runtime (tick

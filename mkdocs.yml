@@ -67,6 +67,16 @@ markdown_extensions:
   - pymdownx.tabbed:
       alternate_style: true
 
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/selvaz/LazyPulse
+    - icon: fontawesome/brands/python
+      link: https://pypi.org/project/lazypulse/
+    - icon: fontawesome/solid/envelope
+      link: mailto:LazyBridgeLabs@gmail.com
+      name: Email LazyBridge Labs
+
 nav:
   - Home: index.md
   - Architecture: architecture.md

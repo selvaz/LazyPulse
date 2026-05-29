@@ -82,3 +82,7 @@ nav:
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md
   - Security: security.md
+  - Ecosystem:
+      - lazybridge.com: https://lazybridge.com/
+      - Core docs: https://core.lazybridge.com/
+      - LazyTools: https://tools.lazybridge.com/

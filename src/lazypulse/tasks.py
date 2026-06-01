@@ -13,7 +13,7 @@ share one Store: a second approval of the same task simply returns ``False``.
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from lazypulse import store_keys
 from lazypulse.models import PulseRecord
@@ -25,16 +25,34 @@ if TYPE_CHECKING:
 _TERMINAL_STATUSES = frozenset({"completed", "rejected", "failed"})
 
 
-def pending_tasks(store: Store) -> list[PulseRecord]:
-    """Every task currently waiting for a human decision."""
-    out: list[PulseRecord] = []
+def _iter_task_records(store: Store) -> list[tuple[str, dict[str, Any]]]:
+    """Yield ``(key, raw)`` for every task record in the Store.
+
+    Uses the indexed ``Store.items(prefix=)`` B-tree range scan when available
+    (lazybridge >= 0.9.1), giving O(M) in the number of task keys rather than
+    O(N) over the whole keyspace. Mirrors ``PulseAgent._scan_records`` so the
+    review helpers and the tick loop share one scan strategy; falls back to a
+    full ``keys()`` walk on older stores without ``items(prefix=)``.
+    """
+    if hasattr(store, "items"):
+        return [(k, v) for k, v in store.items(prefix=store_keys.TASK_PREFIX) if isinstance(v, dict)]
+    out: list[tuple[str, dict[str, Any]]] = []
     for key in list(store.keys()):
         if not key.startswith(store_keys.TASK_PREFIX):
             continue
         raw = store.read(key)
-        if isinstance(raw, dict) and raw.get("status") == "awaiting_review":
-            out.append(PulseRecord.model_validate(raw))
+        if isinstance(raw, dict):
+            out.append((key, raw))
     return out
+
+
+def pending_tasks(store: Store) -> list[PulseRecord]:
+    """Every task currently waiting for a human decision."""
+    return [
+        PulseRecord.model_validate(raw)
+        for _key, raw in _iter_task_records(store)
+        if raw.get("status") == "awaiting_review"
+    ]
 
 
 def approve_task(store: Store, task_id: str, *, run_at: datetime | None = None) -> bool:
@@ -88,11 +106,8 @@ def purge_terminal_tasks(
     """
     cutoff = (now or datetime.now(UTC)) - older_than
     deleted = 0
-    for key in list(store.keys()):
-        if not key.startswith(store_keys.TASK_PREFIX):
-            continue
-        raw = store.read(key)
-        if not isinstance(raw, dict) or raw.get("status") not in _TERMINAL_STATUSES:
+    for key, raw in _iter_task_records(store):
+        if raw.get("status") not in _TERMINAL_STATUSES:
             continue
         completed_at = raw.get("completed_at")
         if not isinstance(completed_at, str):

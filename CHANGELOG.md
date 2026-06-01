@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`pending_tasks` / `purge_terminal_tasks` now use the indexed
+  `Store.items(prefix=)` range scan** (with a `keys()` fallback for older
+  stores), matching `PulseAgent._scan_records`. Both previously walked the whole
+  keyspace; they are now O(M) in the number of task records. Notably the
+  retention prune path — the mechanism meant to keep an always-on Store bounded —
+  no longer does a full O(N) keyspace scan itself.
+
+---
+
 ## [0.2.0] — 2026-05-28
 
 ### Added

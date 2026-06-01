@@ -65,6 +65,44 @@ def test_purge_leaves_event_markers_intact() -> None:
     assert store.read(store_keys.event_key("gmail:abc")) is not None
 
 
+def test_purge_ignores_non_task_keys() -> None:
+    # The prune path now scans via Store.items(prefix="pulse:task:"); confirm it
+    # only ever touches task records and leaves unrelated namespaces alone, even
+    # when they would match the terminal/old-enough conditions on shape.
+    store = Store()
+    now = datetime(2026, 1, 2, tzinfo=UTC)
+    old_done = _put(store, status="completed", completed_at=now - timedelta(hours=2))
+    store.write(store_keys.event_key("m1"), {"task_id": "irrelevant"})
+    store.write("pulse:rate:alice:0", {"count": 5})
+    # A non-task key that happens to look like a terminal record must be ignored.
+    store.write("other:thing", {"status": "completed", "completed_at": (now - timedelta(hours=5)).isoformat()})
+
+    deleted = purge_terminal_tasks(store, older_than=timedelta(hours=1), now=now)
+
+    assert deleted == 1
+    keys = list(store.keys())
+    assert store_keys.task_key(old_done) not in keys
+    assert store_keys.event_key("m1") in keys
+    assert "pulse:rate:alice:0" in keys
+    assert "other:thing" in keys
+
+
+def test_pending_tasks_scans_only_task_records() -> None:
+    # pending_tasks shares the indexed scan; non-task noise must never surface
+    # as a (mis-validated) pending record.
+    from lazypulse import pending_tasks
+
+    store = Store()
+    waiting = _put(store, status="awaiting_review", completed_at=None)
+    _put(store, status="completed", completed_at=datetime(2026, 1, 1, tzinfo=UTC))
+    store.write(store_keys.event_key("m1"), {"task_id": "x"})
+    store.write("other:noise", {"status": "awaiting_review"})
+
+    pending = pending_tasks(store)
+
+    assert [r.task_id for r in pending] == [waiting]
+
+
 async def test_pulse_agent_prunes_terminal_records_when_retention_set() -> None:
     clock = FakeClock()
     store = Store()

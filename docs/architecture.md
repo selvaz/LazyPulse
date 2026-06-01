@@ -70,9 +70,12 @@ The background loop (`start()`) just calls `tick_once()` every
 
 Every task leaves a `PulseRecord` in the Store, and terminal records
 (`completed` / `rejected` / `failed`) are retained forever by default. The
-per-tick recovery, collection, and prune steps walk the task keyspace
-(currently O(N) over the ledger), so for an **always-on** agent the unbounded
-ledger is the main scaling cliff over time.
+per-tick recovery, collection, and prune steps scan the task records via an
+indexed `Store.items(prefix="pulse:task:")` range scan (lazybridge ≥ 0.9.1) —
+O(M) in the number of task records, not O(N) over the whole keyspace — and fall
+back to a full `keys()` walk on older stores. Either way they walk *all* task
+records regardless of status, so for an **always-on** agent the unbounded ledger
+(an ever-growing M) is the main scaling cliff over time.
 
 `terminal_retention=<seconds>` makes the prune step delete finished records once
 they age out, keeping the ledger bounded:
@@ -84,8 +87,9 @@ PulseAgent(store=Store(db="pulse.db"), terminal_retention=7 * 24 * 3600, ...)
 **Set `terminal_retention` in production.** Pick a window long enough for the
 auditing/observability you need but short enough to keep the ledger bounded.
 `None` (the default) keeps the full history and is fine for tests and
-short-lived runs. The O(N) scan behaviour is a documented follow-up for a
-status-indexed key scheme.
+short-lived runs. Making the scans proportional to *due* work rather than to all
+task records — a status-indexed key scheme (e.g. `pulse:task:scheduled:*`) — is
+a documented follow-up.
 
 ## Why a policy is not a Guard, and an adapter is not a tool
 

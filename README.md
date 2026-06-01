@@ -197,7 +197,7 @@ A `schedule`-only agent (no adapters) needs no policy. Combine with a small
 Every task leaves a `PulseRecord` in the Store, and terminal records
 (`completed`/`rejected`/`failed`) are kept forever by default. For an always-on
 agent that means the ledger grows without bound, and because the per-tick scans
-(`_collect_due`, `_recover_stale`, recovery, pruning) walk the task keyspace,
+(`_collect_due`, `_recover_stale`, recovery, pruning) walk every task record,
 that growth eventually shows up as per-tick cost.
 
 Set `terminal_retention=` to an age (in seconds) so finished records are pruned
@@ -216,9 +216,12 @@ window long enough for whatever auditing/observability you need (e.g. a few days
 to a week), but short enough to keep the ledger bounded. `None` (the default)
 preserves the full historical ledger and is fine for tests and short-lived runs.
 
-> Note: per-tick task lookups are currently O(N) over the task ledger, so
-> `terminal_retention` is the primary lever for keeping an always-on agent
-> healthy over time.
+> Note: per-tick task lookups use an indexed `Store.items(prefix=)` range scan
+> (lazybridge ≥ 0.9.1), so they are O(M) in the number of task records — not the
+> whole keyspace. They still walk *all* task records regardless of status, so
+> `terminal_retention` (which bounds M) remains the primary lever for keeping an
+> always-on agent healthy; a status-indexed key scheme to make scans
+> proportional to *due* work is a documented follow-up.
 
 ### PulsePolicy — who may ask for what
 

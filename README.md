@@ -218,7 +218,7 @@ pulse = PulseAgent(
         backoff_max=300.0,
         retry_on=(Exception,), # only retry these exception types
     ),
-    ...
+    # engine=, adapters=, policy=, … — the usual PulseAgent args
 )
 ```
 

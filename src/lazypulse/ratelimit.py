@@ -13,7 +13,11 @@ class RateLimit:
     max_per_sender:
         Maximum messages allowed per sender per ``window_seconds``.
     window_seconds:
-        Rolling window size in seconds.
+        Window size in seconds. The window is **fixed (tumbling)**, not
+        sliding: senders are bucketed by ``floor(now / window_seconds)``, so the
+        counter resets at each boundary. A burst straddling a boundary can
+        therefore admit up to ``2 * max_per_sender`` across the two adjacent
+        windows — fine for coarse abuse limiting, which is the intent.
     on_exceeded:
         Action when the limit is exceeded: ``"reject"`` drops the message,
         ``"queue"`` routes it to human review.

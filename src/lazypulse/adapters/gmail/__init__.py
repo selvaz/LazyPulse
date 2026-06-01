@@ -5,7 +5,7 @@ The inbound polling inbox and the auth-aware policy live here. The Gmail
 ``GmailSendBlocked``) and the ``parse_authentication_results`` parser were
 extracted to the sibling ``lazytoolkit`` package (``pip install
 'lazytoolkit[gmail]'``). They remain importable from here via a lazy deprecation
-shim that is removed in 0.2.
+shim that is removed in 0.3.
 """
 
 from __future__ import annotations
@@ -50,7 +50,7 @@ def __getattr__(name: str):  # PEP 562 — fires only for moved symbols
     if name in _MOVED:
         warnings.warn(
             f"lazypulse.adapters.gmail.{name} was extracted to lazytools.connectors.gmail; "
-            "install 'lazytoolkit' and import from there. This shim is removed in 0.2.",
+            "install 'lazytoolkit' and import from there. This shim is removed in 0.3.",
             DeprecationWarning,
             stacklevel=2,
         )

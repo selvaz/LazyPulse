@@ -73,16 +73,20 @@ if TYPE_CHECKING:
 
 # Symbols served lazily by ``__getattr__`` so importing them does not force
 # the optional extra to be installed unless the user actually reaches for it.
+# ``GmailTools`` / ``TelegramTools`` now live in ``lazytools.connectors.*`` (the
+# adapters package only re-exports them via a deprecation shim); resolve them
+# straight from their new home so ``from lazypulse import GmailTools`` is a clean
+# convenience re-export and does not emit the shim's DeprecationWarning.
 _LAZY: dict[str, tuple[str, str]] = {
     "WebhookAdapter": ("lazypulse.adapters.webhook", "webhook"),
     "GmailInbox": ("lazypulse.adapters.gmail", "gmail"),
     "GmailInboxConfig": ("lazypulse.adapters.gmail", "gmail"),
     "GmailPolicy": ("lazypulse.adapters.gmail", "gmail"),
-    "GmailTools": ("lazypulse.adapters.gmail", "gmail"),
+    "GmailTools": ("lazytools.connectors.gmail", "gmail"),
     "TelegramInbox": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramInboxConfig": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramPolicy": ("lazypulse.adapters.telegram", "telegram"),
-    "TelegramTools": ("lazypulse.adapters.telegram", "telegram"),
+    "TelegramTools": ("lazytools.connectors.telegram", "telegram"),
     "CronTrigger": ("lazypulse.cron", "cron"),
 }
 

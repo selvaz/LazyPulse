@@ -5,6 +5,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Changed
+- **`pending_tasks` / `purge_terminal_tasks` now use the indexed
+  `Store.items(prefix=)` range scan** (with a `keys()` fallback for older
+  stores), matching `PulseAgent._scan_records`. Both previously walked the whole
+  keyspace; they are now O(M) in the number of task records. Notably the
+  retention prune path — the mechanism meant to keep an always-on Store bounded —
+  no longer does a full O(N) keyspace scan itself.
+
+---
+
 ## [0.2.0] — 2026-05-28
 
 ### Added
@@ -30,7 +42,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 - **`store_keys.RATE_KEY` / `RATE_PREFIX`** — key templates for rate-limit counters.
 
 ### Changed
-- Minimum `lazybridge` pin raised to `>=0.9.1` (requires `Store.items(prefix=)`).
+- `lazybridge` pin kept at `>=0.7.9,<0.10`. The indexed `Store.items(prefix=)`
+  fast path is used opportunistically (guarded by `hasattr`), so it engages on
+  lazybridge ≥ 0.9.1 and falls back to the full-keyspace scan on older versions
+  — no hard bump is required. (A first pass raised the floor to `>=0.9.1`; it
+  was reverted because 0.9.1 is not yet on PyPI.)
 - `__version__` bumped to `"0.2.0"`.
 - `PulsePolicy` gains an optional `rate_limit: RateLimit | None = None` field.
 - `tick_once` now calls `_process_cron` and `_reschedule_due_retries` before

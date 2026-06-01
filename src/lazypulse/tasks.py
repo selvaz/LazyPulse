@@ -30,12 +30,22 @@ def _iter_task_records(store: Store) -> list[tuple[str, dict[str, Any]]]:
 
     Uses the indexed ``Store.items(prefix=)`` B-tree range scan when available
     (lazybridge >= 0.9.1), giving O(M) in the number of task keys rather than
-    O(N) over the whole keyspace. Mirrors ``PulseAgent._scan_records`` so the
-    review helpers and the tick loop share one scan strategy; falls back to a
-    full ``keys()`` walk on older stores without ``items(prefix=)``.
+    O(N) over the whole keyspace. Mirrors ``PulseAgent._scan_records`` (which
+    delegates here) so the review helpers and the tick loop share one scan
+    strategy. Falls back to a full ``keys()`` walk when the store has no
+    ``items`` at all, or exposes an ``items()`` that predates the ``prefix=``
+    keyword (an older lazybridge in the supported ``>=0.7.9`` range, or a
+    duck-typed test store) — probed by catching ``TypeError`` on the call so an
+    unsupported keyword degrades to the slower scan instead of failing outright.
     """
-    if hasattr(store, "items"):
-        return [(k, v) for k, v in store.items(prefix=store_keys.TASK_PREFIX) if isinstance(v, dict)]
+    items = getattr(store, "items", None)
+    if items is not None:
+        try:
+            pairs = items(prefix=store_keys.TASK_PREFIX)
+        except TypeError:
+            pairs = None  # items() exists but doesn't accept prefix= — fall back
+        if pairs is not None:
+            return [(k, v) for k, v in pairs if isinstance(v, dict)]
     out: list[tuple[str, dict[str, Any]]] = []
     for key in list(store.keys()):
         if not key.startswith(store_keys.TASK_PREFIX):

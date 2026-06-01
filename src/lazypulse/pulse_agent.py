@@ -808,22 +808,17 @@ class PulseAgent(Agent):
     # Helpers
     # ------------------------------------------------------------------ #
     def _scan_records(self) -> list[tuple[str, dict[str, Any]]]:
-        # Uses an indexed B-tree range scan via Store.items(prefix=TASK_PREFIX)
-        # when the store supports it (LazyBridge >= 0.9.1), giving O(M) in the
-        # number of matching task keys rather than O(N) total keyspace.
+        # Delegates to the shared scanner so the tick loop and the review/prune
+        # helpers use one strategy: an indexed B-tree range scan via
+        # Store.items(prefix=TASK_PREFIX) when the store supports it (LazyBridge
+        # >= 0.9.1), giving O(M) in matching task keys rather than O(N) total
+        # keyspace, with a keys() fallback for stores whose items() lacks the
+        # prefix= keyword.
         if self.store is None:
             return []
-        if hasattr(self.store, "items"):
-            return [(k, v) for k, v in self.store.items(prefix=store_keys.TASK_PREFIX) if isinstance(v, dict)]
-        # Legacy fallback for stores without items(prefix=).
-        out: list[tuple[str, dict[str, Any]]] = []
-        for key in list(self.store.keys()):
-            if not key.startswith(store_keys.TASK_PREFIX):
-                continue
-            raw = self.store.read(key)
-            if isinstance(raw, dict):
-                out.append((key, raw))
-        return out
+        from lazypulse.tasks import _iter_task_records
+
+        return _iter_task_records(self.store)
 
     def _emit(self, event: str, payload: dict[str, Any]) -> None:
         session = self.session

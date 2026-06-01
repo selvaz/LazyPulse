@@ -28,6 +28,7 @@ pip install lazypulse                # core
 pip install 'lazypulse[webhook]'     # + HTTP intake
 pip install 'lazypulse[gmail]'       # + Gmail polling & draft/send
 pip install 'lazypulse[telegram]'    # + Telegram polling & send
+pip install 'lazypulse[cron]'        # + cron-expression scheduling
 pip install 'lazypulse[dev]'         # test + lint toolchain
 ```
 
@@ -155,6 +156,7 @@ plus these:
 | `unsafe_allow_all=` | `False` | Opt out of requiring a policy — runs all inbound with full trust. Local dev only. |
 | `tick_seconds=` | `1.0` | How often the loop wakes up. |
 | `max_concurrent_inbound=` | `4` | Cap on tasks running at once. |
+| `retry_policy=` | `None` | `RetryPolicy(...)` — auto-retry failed tasks with exponential backoff. Configurable `max_attempts`, `backoff_base`, `backoff_max`, and a `retry_on` exception filter (see **Retries and cron** below). |
 | `stale_after=` | `max(tick*60, 3600)` | A `running` task older than this is treated as crashed and retried. Default is 1 h so slow LLM workers and tasks parked in human review (default review timeout 3600 s) are never falsely recovered. Tune down for fast pure-LLM agents. |
 | `terminal_retention=` | `None` | When set (seconds), terminal task records (`completed`/`rejected`/`failed`) older than this are pruned during ticks so an always-on agent's Store does not grow without bound. `None` keeps the full ledger forever. **Set this in production** (see below). |
 | `clock=` | UTC now | Inject a clock for deterministic tests. |
@@ -187,10 +189,41 @@ bypass the policy (your own code is trusted) and run on the next tick where
 pulse.schedule("post the daily standup summary")            # now
 pulse.schedule_after("retry the export", seconds=300)       # in 5 min
 pulse.schedule_at("send the weekly report", when=monday_9am)
+pulse.schedule_cron("send the weekly report", "0 9 * * 1")  # every Mon 09:00
 ```
+
+`schedule_cron(text, cron, tz="UTC")` registers a **recurring** task from a
+5-field cron expression and returns a `cron_id`; the tick loop fires it on
+schedule and advances the next fire time atomically. It needs the `cron` extra
+(`pip install 'lazypulse[cron]'`). The other three `schedule_*` calls are
+one-shots.
 
 A `schedule`-only agent (no adapters) needs no policy. Combine with a small
 `tick_seconds` for reactive work, or a large one for cron-like jobs.
+
+### Retries and cron — the resilient side
+
+Tasks fail — an LLM call times out, a tool 500s. Pass a `RetryPolicy` to retry
+them automatically with exponential backoff instead of marking them `failed` on
+the first error:
+
+```python
+from lazypulse import PulseAgent, RetryPolicy
+
+pulse = PulseAgent(
+    store=Store(db="pulse.db"),
+    retry_policy=RetryPolicy(
+        max_attempts=4,        # total attempts before giving up (default 1 = no retry)
+        backoff_base=2.0,      # delay = min(base ** attempt, backoff_max) seconds
+        backoff_max=300.0,
+        retry_on=(Exception,), # only retry these exception types
+    ),
+    # engine=, adapters=, policy=, … — the usual PulseAgent args
+)
+```
+
+A retried task is re-scheduled with its `next_retry_at` set; the tick loop picks
+it up when due, and `attempt` is tracked on the `PulseRecord`.
 
 ### Bounding Store growth in production — `terminal_retention`
 
@@ -258,6 +291,26 @@ class SlackPolicy(PulsePolicy):
 
 Tighten the matrix per deployment with `action_rules=`. See
 [`docs/security.md`](docs/security.md) for the full threat model.
+
+**Per-sender rate limiting.** Pass a `RateLimit` to the policy to cap how many
+messages a single sender may submit per time window — a coarse abuse guard
+applied at intake, before the agent runs:
+
+```python
+from lazypulse import PulsePolicy, RateLimit
+
+policy = PulsePolicy(
+    rate_limit=RateLimit(
+        max_per_sender=10,     # messages allowed per window, per sender
+        window_seconds=3600,   # fixed (tumbling) window
+        on_exceeded="reject",  # "reject" drops the message; "queue" routes it to human review
+    ),
+)
+```
+
+The window is fixed, not sliding, so a burst straddling a boundary can admit up
+to `2 * max_per_sender` across the two adjacent windows — fine for coarse abuse
+limiting. Over-limit messages set `rate_limited` on the `PulseRecord`.
 
 ### Adapters — where work comes from
 

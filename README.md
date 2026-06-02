@@ -21,6 +21,16 @@ loop**, a **trust policy**, and **inbound adapters**.
 
 ---
 
+> [!IMPORTANT]
+> **Compliance & liability — your responsibility.** LazyPulse connects to external
+> services (Gmail, Telegram, webhooks). You are solely responsible for ensuring
+> your use complies with each provider's Terms of Service — in particular
+> [Google's Terms of Service](https://policies.google.com/terms) and the
+> [API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
+> for Gmail — and with applicable laws. Polling and scheduled sending can get an
+> account rate-limited or suspended. Provided "as is", without warranty; the
+> authors accept no liability for how it is used (see [LICENSE](LICENSE)).
+
 ## Install
 
 ```bash

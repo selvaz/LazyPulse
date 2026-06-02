@@ -12,6 +12,19 @@ before anything risky (like sending an email) actually happens.
     [LazyTools](https://tools.lazybridge.com/). See the
     [ecosystem overview](https://lazybridge.com/).
 
+!!! warning "Compliance & liability — your responsibility"
+    LazyPulse runs always-on agents that connect to external services (Gmail,
+    Telegram, webhooks). **You are solely responsible for ensuring your use
+    complies with each provider's terms** — in particular Google's
+    [Terms of Service](https://policies.google.com/terms) and the
+    [API Services User Data Policy](https://developers.google.com/terms/api-services-user-data-policy)
+    for Gmail — and with any applicable laws. Polling inboxes and sending on a
+    schedule can get an account rate-limited or suspended. LazyPulse is provided
+    **"as is", without warranty, and the authors accept no liability** for how it
+    is used (see
+    [LICENSE](https://github.com/selvaz/LazyPulse/blob/main/LICENSE)). Use
+    least-privilege scopes and obtain the necessary consent before deploying.
+
 ```
    inbound message            PulsePolicy                 your Agent
   ┌──────────────┐   drain   ┌────────────┐   allow?   ┌────────────┐

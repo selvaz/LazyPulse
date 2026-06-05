@@ -453,3 +453,12 @@ Runnable files in [`examples/`](examples/) (01, 05, 06 need no credentials):
 ## License
 
 Apache-2.0
+
+---
+
+## How This Was Built
+
+LazyBridge is designed by **selvaz** with **Claude Code** and
+**ChatGPT Codex** as primary implementation partners.
+I focus on architecture, mental model, and trade-offs —
+they handle the building under my direction.

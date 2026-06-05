@@ -11,6 +11,7 @@ strict: true
 
 theme:
   name: material
+  custom_dir: overrides
   language: en
   palette:
     - media: "(prefers-color-scheme: light)"
@@ -76,6 +77,9 @@ extra:
     - icon: fontawesome/solid/envelope
       link: mailto:LazyBridgeLabs@gmail.com
       name: Email LazyBridge Labs
+
+extra_css:
+  - stylesheets/extra.css
 
 nav:
   - Home: index.md

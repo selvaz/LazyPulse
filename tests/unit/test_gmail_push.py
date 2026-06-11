@@ -239,3 +239,40 @@ async def test_watch_armed_once_and_renewed_near_expiry() -> None:
     store.write(key, state)
     await adapter.drain(store=store, session=None)
     assert len(fake.watches) == 2
+
+
+# --------------------------------------------------------------------------- #
+# Burst larger than one history batch (Codex P1: must not drop mail)
+# --------------------------------------------------------------------------- #
+
+
+async def test_burst_larger_than_batch_drains_fully_without_dropping() -> None:
+    """120 messages arrive with a single push notification. The first drain
+    is capped at the history batch size; the cursor must stop at the last
+    returned message and the adapter must keep draining on later ticks until
+    the backlog is empty — no idle-resync wait, no skipped mail."""
+    fake = FakeGmailService()
+    store = Store()
+    adapter = _adapter(fake, FakeClock())
+    await adapter.drain(store=store, session=None)
+
+    for i in range(120):
+        fake.add_message(f"b{i}")
+    await _notify(adapter, _push_body())
+
+    collected: list[str] = []
+    for _ in range(5):  # a few ticks; PulseAgent records each batch between drains
+        msgs = await adapter.drain(store=store, session=None)
+        for m in msgs:
+            collected.append(m.message_id)
+            store.write(store_keys.event_key(m.message_id), {"task_id": m.message_id})
+        if not msgs and len(collected) == 120:
+            break
+
+    assert collected == [f"b{i}" for i in range(120)]  # all of it, in order
+
+    # Backlog settled: cursor is at "now" and the adapter goes quiet again.
+    assert await adapter.drain(store=store, session=None) == []
+    state = store.read(store_keys.LAST_HISTORY.format(account=ACCOUNT))
+    assert state["history_id"] == fake.get_history_id()
+    assert not state.get("pending_history_id")

@@ -249,8 +249,8 @@ class PulseAgent(Agent):
     def running(self) -> Iterator[None]:
         """Run the loop for the duration of a ``with`` block::
 
-            with pulse.running():
-                time.sleep(3600)        # serve for an hour
+        with pulse.running():
+            time.sleep(3600)        # serve for an hour
         """
         self.start()
         try:
@@ -422,14 +422,7 @@ class PulseAgent(Agent):
 
         # Only emit when something happened — a quiet tick every ``tick_seconds``
         # would otherwise flood the Session of a long-running agent.
-        if (
-            report.drained
-            or report.due
-            or report.recovered
-            or report.pruned
-            or report.completed
-            or report.failed
-        ):
+        if report.drained or report.due or report.recovered or report.pruned or report.completed or report.failed:
             self._emit("pulse.tick", report.model_dump(mode="json"))
         return report
 
@@ -670,7 +663,11 @@ class PulseAgent(Agent):
             )
         else:
             final = _finalize(started, env, self._clock())
-            if final.status == "failed" and self._retry_policy is not None and self._retry_policy.should_retry_by_count(started.attempt):
+            if (
+                final.status == "failed"
+                and self._retry_policy is not None
+                and self._retry_policy.should_retry_by_count(started.attempt)
+            ):
                 delay = self._retry_policy.next_delay(started.attempt)
                 now_ts = self._clock()
                 err_obj = getattr(env, "error", None)
@@ -793,9 +790,7 @@ class PulseAgent(Agent):
             cron_items: list[tuple[str, Any]] = self.store.items(prefix=store_keys.CRON_PREFIX)
         else:
             cron_items = [
-                (key, self.store.read(key))
-                for key in list(self.store.keys())
-                if key.startswith(store_keys.CRON_PREFIX)
+                (key, self.store.read(key)) for key in list(self.store.keys()) if key.startswith(store_keys.CRON_PREFIX)
             ]
         for key, raw in cron_items:
             if not isinstance(raw, dict):

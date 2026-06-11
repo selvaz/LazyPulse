@@ -40,9 +40,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `backoff_seconds`.
 
 ### Changed
-- **`lazytoolkit` pin widened to `>=0.2.0,<0.3`** (was `<0.2.0`, stale
-  the moment LazyTools 0.2.0 shipped); CI installs the sibling at the
-  commit carrying the Gmail history/watch surface.
+- **`lazytoolkit` pin raised to `>=0.3.0,<0.4`** (was `<0.2.0`, stale the
+  moment LazyTools 0.2.0 shipped). 0.3.0 is required — not just allowed —
+  because `GmailPushInbox` burst-safety depends on the cursor-safety
+  contract introduced after the 0.2.0 release; the released 0.2.0 build
+  would silently drop mail on capped history walks. CI installs the
+  sibling at the commit carrying the fixed contract.
 - **`pending_tasks` / `purge_terminal_tasks` now use the indexed
   `Store.items(prefix=)` range scan** (with a `keys()` fallback for older
   stores), matching `PulseAgent._scan_records`. Both previously walked the whole

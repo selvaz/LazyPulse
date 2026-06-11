@@ -21,10 +21,11 @@ EVENT = "pulse:event:{event_id}"
 REVIEW_REQ = "pulse:review:req:{review_id}"
 REVIEW_RESP = "pulse:review:resp:{review_id}"
 
-#: Gmail history cursor — RESERVED for future history-based polling and not yet
-#: read or written anywhere in the codebase. The current GmailInbox polls with a
-#: query and relies on the central ``EVENT`` idempotency marker (not a
-#: Gmail-specific key), so this template is intentionally inert for now.
+#: Gmail incremental-sync state, one entry per account, owned by
+#: ``GmailPushInbox``: ``{"history_id": str, "pending_ids": [...],
+#: "pending_history_id": str, "watch_expiration_ms": int}``. The cursor
+#: advances only after every id in the pending batch has its ``EVENT``
+#: marker (at-least-once). The polling ``GmailInbox`` does not use this key.
 LAST_HISTORY = "pulse:gmail:last_history_id:{account}"
 
 #: Webhook replay protection.

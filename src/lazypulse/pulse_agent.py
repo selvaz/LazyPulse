@@ -76,6 +76,8 @@ class PulseAgent(Agent):
         unsafe_allow_all: bool = False,
         clock: Callable[[], datetime] | None = None,
         retry_policy: RetryPolicy | None = None,
+        adapter_backoff_base: float = 2.0,
+        adapter_backoff_cap: float = 300.0,
         **agent_kwargs: Any,
     ) -> None:
         # Risk note: super().__init__ MUST run first. Agent.__init__ registers
@@ -134,6 +136,13 @@ class PulseAgent(Agent):
         self._last_prune_at: datetime | None = None
         self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
         self._retry_policy = retry_policy
+        # Exponential backoff on adapter.drain() failures. Without this, a
+        # flaky upstream (Gmail 429, Telegram outage) is re-hit at full tick
+        # rate — the classic way to escalate a rate-limit into a suspension.
+        # Per-adapter state: (consecutive_failures, retry_not_before).
+        self._adapter_backoff_base = adapter_backoff_base
+        self._adapter_backoff_cap = adapter_backoff_cap
+        self._adapter_backoff: dict[str, tuple[int, datetime]] = {}
         # The loop runs on its own event loop in a daemon thread, so user code
         # stays synchronous — no asyncio.run / await / async with required.
         self._thread: threading.Thread | None = None
@@ -448,14 +457,31 @@ class PulseAgent(Agent):
         assert self.store is not None  # guaranteed by the __init__ check
         out: list[InboundMessage] = []
         for adapter in self._adapters:
+            name = getattr(adapter, "name", repr(adapter))
+            backoff = self._adapter_backoff.get(name)
+            if backoff is not None and self._clock() < backoff[1]:
+                continue  # still cooling down after consecutive failures
             try:
                 msgs = await adapter.drain(store=self.store, session=self.session)
             except Exception as exc:
+                failures = (backoff[0] if backoff else 0) + 1
+                delay = min(
+                    self._adapter_backoff_base * (2 ** (failures - 1)),
+                    self._adapter_backoff_cap,
+                )
+                self._adapter_backoff[name] = (failures, self._clock() + timedelta(seconds=delay))
                 self._emit(
                     "pulse.adapter_error",
-                    {"adapter": getattr(adapter, "name", repr(adapter)), "error": f"{type(exc).__name__}: {exc}"},
+                    {
+                        "adapter": name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                        "consecutive_failures": failures,
+                        "backoff_seconds": delay,
+                    },
                 )
                 continue
+            if backoff is not None:
+                del self._adapter_backoff[name]  # healthy again — reset
             out.extend(msgs)
         return out
 

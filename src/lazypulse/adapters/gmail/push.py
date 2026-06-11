@@ -66,6 +66,13 @@ if TYPE_CHECKING:
     from starlette.responses import Response
 
 
+#: History ids fetched per drain. The client's cursor never advances past
+#: the last returned message, so a burst larger than this is drained over
+#: consecutive ticks (the adapter re-arms its own notified flag while a
+#: batch comes back full) — bounded work per tick, no mail skipped.
+_HISTORY_BATCH = 100
+
+
 @dataclass
 class GmailPushConfig(GmailInboxConfig):
     """Configuration for :class:`GmailPushInbox`.
@@ -136,11 +143,7 @@ class GmailPushInbox(GmailInbox):
         # Settle the previous batch: the cursor only advances once every id
         # we emitted has been durably recorded by the PulseAgent.
         if state.get("pending_history_id"):
-            unrecorded = [
-                mid
-                for mid in state.get("pending_ids", [])
-                if store.read(store_keys.event_key(mid)) is None
-            ]
+            unrecorded = [mid for mid in state.get("pending_ids", []) if store.read(store_keys.event_key(mid)) is None]
             if unrecorded:
                 store.write(key, state)
                 return [self._to_inbound(mid, self._client.get_message(mid)) for mid in unrecorded]
@@ -165,7 +168,7 @@ class GmailPushInbox(GmailInbox):
 
         try:
             ids, new_cursor = self._client.list_history_message_ids(
-                start_history_id=str(state["history_id"])
+                start_history_id=str(state["history_id"]), max_results=_HISTORY_BATCH
             )
         except GmailHistoryExpired:
             # Cursor older than Gmail's retention window (e.g. the daemon
@@ -187,6 +190,12 @@ class GmailPushInbox(GmailInbox):
             return []
 
         self._last_sync_at = now
+        # A capped batch means more history is waiting behind the cursor
+        # (the client guarantees the cursor stops at the last returned
+        # message). Re-arm the notified flag so the backlog keeps draining
+        # on subsequent ticks instead of waiting for the idle resync.
+        if len(ids) >= _HISTORY_BATCH:
+            self._notified = True
         fresh = [mid for mid in ids if store.read(store_keys.event_key(mid)) is None]
         if new_cursor != str(state["history_id"]) or fresh:
             state["pending_ids"] = fresh

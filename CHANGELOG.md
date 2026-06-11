@@ -25,6 +25,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   (`idle_resync_seconds`, default 900) covers lost push deliveries.
   Steady-state Gmail API usage is zero calls while the mailbox is
   quiet. See `examples/04_gmail_push.py` for the Pub/Sub setup.
+  Burst safety (post-review hardening): history syncs are capped at 100
+  ids per drain, the cursor never advances past unreturned mail (client
+  contract), and the adapter re-arms its own notified flag while batches
+  come back full — a burst larger than one batch drains over consecutive
+  ticks with no skipped messages.
 - **Exponential backoff on `adapter.drain()` failures.** A failing
   adapter was previously re-drained at full tick rate — with a
   1-second tick that is 86,400 failing calls/day against an already

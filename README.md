@@ -36,7 +36,7 @@ loop**, a **trust policy**, and **inbound adapters**.
 ```bash
 pip install lazypulse                # core
 pip install 'lazypulse[webhook]'     # + HTTP intake
-pip install 'lazypulse[gmail]'       # + Gmail polling & draft/send
+pip install 'lazypulse[gmail,webhook]'  # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
 pip install 'lazypulse[telegram]'    # + Telegram polling & send
 pip install 'lazypulse[cron]'        # + cron-expression scheduling
 pip install 'lazypulse[dev]'         # test + lint toolchain
@@ -99,6 +99,33 @@ pass a `policy=` instead, and a `PulseAgent` with adapters but neither will
 ---
 
 ## A real agent: watch Gmail, draft replies, ask before sending
+
+**The default way to watch Gmail is push notifications, not polling.**
+Gmail tells the agent the moment mail arrives (via `users.watch` + a Cloud
+Pub/Sub push subscription); between emails the agent makes **zero** Gmail
+API calls, and each arrival costs one cheap `history.list` call. That keeps
+you far away from quota trouble. `GmailPushInbox` handles the watch
+arming/renewal, the push endpoint (shared-token auth), the persisted
+history cursor, and at-least-once delivery — see
+[`examples/04_gmail_push.py`](examples/04_gmail_push.py) for the full
+walkthrough including the one-time (~10 min) Pub/Sub setup:
+
+```python
+from lazypulse.adapters.gmail import GmailPushConfig, GmailPushInbox
+
+inbox = GmailPushInbox(client, GmailPushConfig(
+    account=OWNER,
+    topic_name="projects/<project>/topics/gmail-pulse",  # watch armed + renewed for you
+    shared_token=PUSH_TOKEN,                             # ?token= auth on the endpoint
+))
+# threading.Thread(target=inbox.serve, daemon=True).start()  # the push endpoint
+# ...then pass adapters=[inbox] below instead of the polling GmailInbox.
+```
+
+The polling `GmailInbox` below remains the **zero-setup quick start** (no
+GCP project needed) and the fallback when you can't expose an HTTPS
+endpoint — it's fine at gentle tick rates, and adapter errors now back off
+exponentially either way:
 
 ```python
 from lazybridge import LLMEngine, Session, Store
@@ -342,7 +369,8 @@ An adapter is **at-least-once**: dedupe is central, on `message_id`, so it's
 fine (preferable, even) to re-emit a message until LazyPulse has durably
 recorded it — that's what makes a crash between drain and record-write safe.
 A message still becomes at most one task. Built-in adapters: `WebhookAdapter`,
-`GmailInbox`, `TelegramInbox`.
+`GmailPushInbox` (the default for Gmail), `GmailInbox` (polling fallback),
+`TelegramInbox`.
 
 Chat platforms make the policy *simpler and stronger* than email:
 `TelegramInbox` carries the platform-authenticated sender id, which can't be

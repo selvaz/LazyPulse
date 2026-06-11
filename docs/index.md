@@ -39,7 +39,7 @@ before anything risky (like sending an email) actually happens.
 
 ```bash
 pip install lazypulse                    # core tick loop + policy
-pip install 'lazypulse[gmail]'           # Gmail inbox (pulls lazytoolkit[gmail])
+pip install 'lazypulse[gmail,webhook]'   # Gmail intake — push notifications, the default (pulls lazytoolkit[gmail] + HTTP pieces)
 pip install 'lazypulse[telegram]'        # Telegram inbox (pulls lazytoolkit[telegram])
 pip install 'lazypulse[webhook]'         # HTTP intake adapter
 ```

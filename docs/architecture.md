@@ -42,7 +42,9 @@ PulseRecord              models.py        per-task lifecycle ledger (Store)
 TickReport               models.py        per-tick summary / event payload
 StoreReviewerUI          review.py        Store-backed HumanEngine UI
 WebhookAdapter           adapters/webhook HTTP intake (extra: webhook)
-GmailInbox / Policy      adapters/gmail   polling + auth classification
+GmailPushInbox           adapters/gmail   push notifications + history sync —
+                                          the default Gmail intake (extras: gmail, webhook)
+GmailInbox / Policy      adapters/gmail   polling fallback + auth classification
                                           (send tools: lazytools.connectors.gmail, extra: gmail)
 ```
 

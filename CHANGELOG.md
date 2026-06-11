@@ -7,7 +7,37 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`GmailPushInbox` / `GmailPushConfig` — event-driven Gmail intake, now
+  the default recommendation over polling.** Gmail's `users.watch` is
+  armed onto a Cloud Pub/Sub topic (and re-armed before its <=7-day
+  expiry); the push subscription targets the adapter's HTTP endpoint
+  (shared `?token=` auth — 403 on mismatch so misconfiguration stays
+  visible; malformed bodies are acked to avoid poison-message
+  redelivery; notifications for other accounts are ignored). The
+  handler only flips a flag; the next `drain()` makes **one**
+  `users.history.list` call from the cursor persisted under
+  `store_keys.LAST_HISTORY` (previously reserved, now live) and emits
+  new mail through the same authentication-aware conversion as the
+  polling `GmailInbox`. At-least-once: the cursor advances only after
+  every id in the prior batch has its `EVENT` marker; expired cursors
+  resync forward with a warning; an optional idle resync
+  (`idle_resync_seconds`, default 900) covers lost push deliveries.
+  Steady-state Gmail API usage is zero calls while the mailbox is
+  quiet. See `examples/04_gmail_push.py` for the Pub/Sub setup.
+- **Exponential backoff on `adapter.drain()` failures.** A failing
+  adapter was previously re-drained at full tick rate — with a
+  1-second tick that is 86,400 failing calls/day against an already
+  rate-limited upstream. Consecutive failures now back off
+  (`adapter_backoff_base`, default 2s, doubling up to
+  `adapter_backoff_cap`, default 300s; reset on first success), and
+  `pulse.adapter_error` events carry `consecutive_failures` /
+  `backoff_seconds`.
+
 ### Changed
+- **`lazytoolkit` pin widened to `>=0.2.0,<0.3`** (was `<0.2.0`, stale
+  the moment LazyTools 0.2.0 shipped); CI installs the sibling at the
+  commit carrying the Gmail history/watch surface.
 - **`pending_tasks` / `purge_terminal_tasks` now use the indexed
   `Store.items(prefix=)` range scan** (with a `keys()` fallback for older
   stores), matching `PulseAgent._scan_records`. Both previously walked the whole

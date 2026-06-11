@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING
 
 from lazypulse.adapters.gmail.inbox import GmailInbox, GmailInboxConfig
 from lazypulse.adapters.gmail.policy import GmailPolicy
+from lazypulse.adapters.gmail.push import GmailPushConfig, GmailPushInbox
 
 if TYPE_CHECKING:
     from lazytools.connectors.gmail import (
@@ -28,6 +29,8 @@ if TYPE_CHECKING:
 __all__ = [
     "GmailInbox",
     "GmailInboxConfig",
+    "GmailPushInbox",
+    "GmailPushConfig",
     "GmailPolicy",
     "GmailTools",
     "GmailSendBlocked",

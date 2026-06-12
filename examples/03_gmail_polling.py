@@ -1,5 +1,10 @@
 """Gmail polling with a conservative trust policy.
 
+NOTE: polling is the zero-setup quick start. For always-on daemons the
+default recommendation is **push notifications** (zero Gmail API calls
+while the mailbox is quiet) — see ``04_gmail_push.py`` and the
+"Gmail (push & polling)" docs page.
+
 Requires the gmail extra:  pip install 'lazypulse[gmail]'
 
 Setup:

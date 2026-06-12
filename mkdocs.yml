@@ -48,6 +48,7 @@ plugins:
         Overview:
           - index.md
         Guides:
+          - gmail.md
           - architecture.md
           - plan_engine.md
           - security.md
@@ -83,6 +84,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Gmail (push & polling): gmail.md
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md
   - Security: security.md

@@ -5,7 +5,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
-## [Unreleased]
+## [0.3.0] — 2026-06-12
+
+### Removed (breaking, as documented in 0.2)
+- **The `lazypulse.adapters.gmail` deprecation shim is gone.** The lazy
+  PEP 562 re-exports of `GmailClient`, `GmailService`, `GmailTools`,
+  `GmailSendBlocked`, and `parse_authentication_results` (moved to
+  `lazytools.connectors.gmail` in 0.2) now raise `AttributeError` instead
+  of emitting a `DeprecationWarning`. Import from
+  `lazytools.connectors.gmail` directly.
 
 ### Added
 - **`GmailPushInbox` / `GmailPushConfig` — event-driven Gmail intake, now

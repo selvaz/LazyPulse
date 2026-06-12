@@ -44,6 +44,14 @@ pip install 'lazypulse[telegram]'        # Telegram inbox (pulls lazytoolkit[tel
 pip install 'lazypulse[webhook]'         # HTTP intake adapter
 ```
 
+## Watching Gmail: push is the default
+
+Gmail can notify the agent the moment mail arrives (`users.watch` → Cloud
+Pub/Sub → the adapter's HTTP endpoint): **zero Gmail API calls while the
+mailbox is quiet, one cheap `history.list` per email received** — the
+configuration to run when you care about API quota. Polling remains the
+zero-setup quick start. See [Gmail (push & polling)](gmail.md).
+
 ## How it relates to the other packages
 
 - **lazybridge** — `PulseAgent` subclasses `Agent`, so the full Agent surface

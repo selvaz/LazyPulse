@@ -62,6 +62,7 @@ __version__ = "0.3.0"
 
 if TYPE_CHECKING:
     from lazytools.connectors.gmail import GmailTools
+    from lazytools.connectors.outlook import OutlookTools
 
     from lazypulse.adapters.gmail import (
         GmailInbox,
@@ -69,6 +70,11 @@ if TYPE_CHECKING:
         GmailPolicy,
         GmailPushConfig,
         GmailPushInbox,
+    )
+    from lazypulse.adapters.outlook import (
+        OutlookInbox,
+        OutlookInboxConfig,
+        OutlookPolicy,
     )
     from lazypulse.adapters.telegram import (
         TelegramInbox,
@@ -92,6 +98,10 @@ _LAZY: dict[str, tuple[str, str]] = {
     "GmailPushInbox": ("lazypulse.adapters.gmail", "gmail"),
     "GmailPushConfig": ("lazypulse.adapters.gmail", "gmail"),
     "GmailTools": ("lazytools.connectors.gmail", "gmail"),
+    "OutlookInbox": ("lazypulse.adapters.outlook", "outlook"),
+    "OutlookInboxConfig": ("lazypulse.adapters.outlook", "outlook"),
+    "OutlookPolicy": ("lazypulse.adapters.outlook", "outlook"),
+    "OutlookTools": ("lazytools.connectors.outlook", "outlook"),
     "TelegramInbox": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramInboxConfig": ("lazypulse.adapters.telegram", "telegram"),
     "TelegramPolicy": ("lazypulse.adapters.telegram", "telegram"),
@@ -142,6 +152,10 @@ __all__ = [
     "GmailPushConfig",
     "GmailPolicy",
     "GmailTools",
+    "OutlookInbox",
+    "OutlookInboxConfig",
+    "OutlookPolicy",
+    "OutlookTools",
     "TelegramInbox",
     "TelegramInboxConfig",
     "TelegramPolicy",

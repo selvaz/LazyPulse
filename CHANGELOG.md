@@ -5,6 +5,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ---
 
+## [Unreleased]
+
+### Added — local Outlook desktop intake (low-setup alternative to Gmail)
+- **`OutlookInbox` / `OutlookInboxConfig` / `OutlookPolicy`** (new `outlook`
+  extra → `lazytoolkit[outlook]`). Polls the copy of Outlook **already running
+  and signed in** on the same Windows machine over COM, instead of a cloud
+  mail API — so there is **no OAuth, no API quota, and no Pub/Sub push
+  plumbing** to set up. Because it polls a *local* store there is no
+  rate-limit / suspension risk, so a plain per-tick poll is the model (no push
+  variant needed).
+  - Behaviourally identical to `GmailInbox`: at-least-once (re-emits until the
+    central `EVENT` marker exists), central dedupe, and the **same**
+    authentication-aware conversion. The genuine, server-stamped
+    `Authentication-Results` header is parsed with the same
+    `parse_authentication_results`; `OutlookPolicy` maps DKIM/SPF/DMARC to a
+    `TrustLevel` exactly as `GmailPolicy` does.
+  - `OutlookInboxConfig.query` is an Outlook Restrict filter (default
+    `"[Unread] = true"`); `trusted_authserv_id` pins your inbound mail host
+    (no universal value as with Gmail, so it defaults to `None` and warns —
+    first-wins still rejects body forgeries, pinning is defence-in-depth).
+  - The `OutlookClient` / `OutlookTools` clients live in
+    `lazytools.connectors.outlook`; re-exported as `lazypulse.OutlookTools`
+    for convenience. See `examples/08_outlook_local.py`.
+
 ## [0.3.0] — 2026-06-12
 
 ### Removed (breaking, as documented in 0.2)

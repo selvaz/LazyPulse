@@ -37,6 +37,8 @@ dependencies = [
 webhook = ["starlette>=0.37,<1.0", "uvicorn>=0.29,<1.0"]
 # Gmail polling inbox + the extracted client/tools.
 gmail = ["lazytoolkit[gmail]>=0.3.0,<0.4"]
+# Local Outlook desktop inbox + the extracted client/tools (Windows/COM).
+outlook = ["lazytoolkit[outlook]>=0.3.0,<0.4"]
 # Telegram polling inbox + the extracted client/tool.
 telegram = ["lazytoolkit[telegram]>=0.3.0,<0.4"]
 # Cron-expression based scheduling (CronTrigger / schedule_cron).

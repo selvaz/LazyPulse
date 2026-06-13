@@ -9,9 +9,20 @@ import pytest
 from lazybridge import Store
 
 from lazypulse import store_keys
-from lazypulse.adapters.outlook.inbox import OutlookInbox, OutlookInboxConfig
-from lazypulse.adapters.outlook.policy import OutlookPolicy
 from lazypulse.models import ActionClass, TrustLevel
+
+try:
+    # Requires lazytoolkit to ship the outlook connector. Until that release is
+    # published the import fails in CI (it resolves the published lazytoolkit),
+    # so skip rather than break collection — mirrors test_cron.py's croniter guard.
+    from lazypulse.adapters.outlook.inbox import OutlookInbox, OutlookInboxConfig
+    from lazypulse.adapters.outlook.policy import OutlookPolicy
+
+    _HAS_OUTLOOK = True
+except ImportError:
+    _HAS_OUTLOOK = False
+
+pytestmark = pytest.mark.skipif(not _HAS_OUTLOOK, reason="lazytools outlook connector not installed")
 
 _AUTHSERV = "mx.example.com"
 _PASS = f"{_AUTHSERV}; dkim=pass; spf=pass; dmarc=pass"

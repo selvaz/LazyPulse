@@ -60,18 +60,20 @@ class OutlookInboxConfig:
     #: authserv-id *exactly* equals this value is trusted (defends against a
     #: forged header carried inside the message). Unlike Gmail there is no
     #: single well-known value — it is your tenant's inbound mail host (e.g.
-    #: your M365 domain). ``None`` disables pinning: the connector still takes
-    #: the genuine *first* (server-prepended) header via first-wins, so a body
-    #: forgery is ignored, but pinning is recommended defence-in-depth.
+    #: your M365 domain). ``None`` (the default) means **no pin**, and because
+    #: an arbitrary inbound server may not stamp its own
+    #: ``Authentication-Results``, :class:`OutlookPolicy` then **fails closed**
+    #: — it grants no verified trust (owner mail is only ever an unverified
+    #: claim). Set the pin to enable owner/external verification.
     trusted_authserv_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.trusted_authserv_id is None:
             warnings.warn(
-                "OutlookInboxConfig(trusted_authserv_id=None) disables authserv-id "
-                "pinning. First-wins on the server-stamped header still rejects a "
-                "body-forged Authentication-Results, but pin your inbound mail "
-                "host (e.g. your M365 domain) for defence-in-depth.",
+                "OutlookInboxConfig(trusted_authserv_id=None): no authserv-id pin. "
+                "OutlookPolicy will FAIL CLOSED — no message can be owner/external "
+                "verified. Pin your inbound mail host (e.g. your M365 domain) to "
+                "enable verified trust.",
                 UserWarning,
                 stacklevel=2,
             )
@@ -118,7 +120,15 @@ class OutlookInbox:
             sender_raw=sender,
             text=text,
             requested_action=self._config.default_action,
-            metadata={"auth": auth, "subject": subject, "account": self._config.account},
+            metadata={
+                "auth": auth,
+                # Whether the authserv-id was pinned. Without a pin the
+                # Authentication-Results header is not trustworthy on a server
+                # that does not stamp its own, so OutlookPolicy fails closed.
+                "auth_pinned": self._config.trusted_authserv_id is not None,
+                "subject": subject,
+                "account": self._config.account,
+            },
         )
 
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import warnings
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
@@ -106,7 +107,7 @@ def test_config_defaults() -> None:
 
 
 def test_unpinned_authserv_id_warns() -> None:
-    with pytest.warns(UserWarning, match="pinning"):
+    with pytest.warns(UserWarning, match="FAIL CLOSED"):
         OutlookInboxConfig(account="me@x")  # default trusted_authserv_id=None
 
 
@@ -161,6 +162,47 @@ async def test_unknown_sender_is_unknown() -> None:
     msg = (await inbox.drain(store=Store(), session=None))[0]
     policy = OutlookPolicy(owner_emails=["me@example.com"])
     assert policy.classify(msg).trust == TrustLevel.UNKNOWN
+
+
+def _unpinned_inbox(messages: dict[str, dict[str, Any]]) -> OutlookInbox:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")  # the unpinned warning is expected here
+        cfg = OutlookInboxConfig(account="me@example.com", trusted_authserv_id=None)
+    return OutlookInbox(FakeService(messages), cfg)
+
+
+async def test_unpinned_owner_with_passing_auth_is_not_verified() -> None:
+    # Fail closed: without an authserv-id pin the passing header is not trusted,
+    # so an owner address is only an unverified claim — never owner-verified.
+    inbox = _unpinned_inbox({"a": _resource("me@example.com", "Hi", "b", _PASS)})
+    msg = (await inbox.drain(store=Store(), session=None))[0]
+    assert msg.metadata["auth_pinned"] is False
+    policy = OutlookPolicy(owner_emails=["me@example.com"])
+    assert policy.classify(msg).trust == TrustLevel.OWNER_CLAIM_UNVERIFIED
+
+
+async def test_unpinned_allowed_external_is_unknown() -> None:
+    inbox = _unpinned_inbox({"a": _resource("client@partner.com", "Hi", "b", _PASS)})
+    msg = (await inbox.drain(store=Store(), session=None))[0]
+    policy = OutlookPolicy(owner_emails=["me@example.com"], allowed_external_senders=["client@partner.com"])
+    assert policy.classify(msg).trust == TrustLevel.UNKNOWN
+
+
+def test_policy_fails_closed_when_pin_flag_absent() -> None:
+    # A message with no auth_pinned key (e.g. a custom adapter) must default to
+    # fail-closed rather than trusting the header.
+    from lazypulse.models import InboundMessage
+
+    msg = InboundMessage(
+        source="custom",
+        message_id="x",
+        received_at=datetime.now(UTC),
+        sender_raw="me@example.com",
+        text="hi",
+        metadata={"auth": {"dkim": True, "spf": True, "dmarc": True}},  # no auth_pinned
+    )
+    policy = OutlookPolicy(owner_emails=["me@example.com"])
+    assert policy.classify(msg).trust == TrustLevel.OWNER_CLAIM_UNVERIFIED
 
 
 async def test_forged_auth_header_rejected_first_wins() -> None:

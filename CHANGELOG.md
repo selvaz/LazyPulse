@@ -23,8 +23,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
     `TrustLevel` exactly as `GmailPolicy` does.
   - `OutlookInboxConfig.query` is an Outlook Restrict filter (default
     `"[Unread] = true"`); `trusted_authserv_id` pins your inbound mail host
-    (no universal value as with Gmail, so it defaults to `None` and warns —
-    first-wins still rejects body forgeries, pinning is defence-in-depth).
+    (no universal value as with Gmail). When it is unset, `OutlookPolicy`
+    **fails closed** — an arbitrary inbound server may not stamp its own
+    `Authentication-Results`, so an unpinned header is not trusted and no
+    message can be owner/external verified; set the pin to enable verified
+    trust.
   - The `OutlookClient` / `OutlookTools` clients live in
     `lazytools.connectors.outlook`; re-exported as `lazypulse.OutlookTools`
     for convenience. See `examples/08_outlook_local.py`.

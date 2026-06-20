@@ -38,6 +38,7 @@ pip install lazypulse                # core
 pip install 'lazypulse[webhook]'     # + HTTP intake
 pip install 'lazypulse[gmail,webhook]'  # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
 pip install 'lazypulse[telegram]'    # + Telegram polling & send
+pip install 'lazypulse[outlook]'     # + local Outlook desktop inbox (Windows, via LazyTools)
 pip install 'lazypulse[cron]'        # + cron-expression scheduling
 pip install 'lazypulse[dev]'         # test + lint toolchain
 ```
@@ -286,6 +287,10 @@ window long enough for whatever auditing/observability you need (e.g. a few days
 to a week), but short enough to keep the ledger bounded. `None` (the default)
 preserves the full historical ledger and is fine for tests and short-lived runs.
 
+For a one-off trim outside the tick loop (a migration, or a manual cleanup), call
+`purge_terminal_tasks(store, older_than=timedelta(days=7))` directly — it deletes
+terminal records older than the given age and returns how many it removed.
+
 > Note: per-tick task lookups use an indexed `Store.items(prefix=)` range scan
 > (lazybridge ≥ 0.9.1), so they are O(M) in the number of task records — not the
 > whole keyspace. They still walk *all* task records regardless of status, so
@@ -370,7 +375,8 @@ fine (preferable, even) to re-emit a message until LazyPulse has durably
 recorded it — that's what makes a crash between drain and record-write safe.
 A message still becomes at most one task. Built-in adapters: `WebhookAdapter`,
 `GmailPushInbox` (the default for Gmail), `GmailInbox` (polling fallback),
-`TelegramInbox`.
+`TelegramInbox`, and `OutlookInbox` (a local Outlook desktop inbox on Windows,
+with `OutlookInboxConfig` / `OutlookPolicy`; needs the `[outlook]` extra).
 
 Chat platforms make the policy *simpler and stronger* than email:
 `TelegramInbox` carries the platform-authenticated sender id, which can't be
@@ -471,6 +477,7 @@ Runnable files in [`examples/`](examples/) (01, 05, 06 need no credentials):
 | `05_plan_routing_deterministico.py` | route by category with a `Plan` engine |
 | `06_multi_pulse_shared_store.py` | two agents, one Store, no double-runs |
 | `07_telegram_polling.py` | watch a Telegram bot, reply only to the owner |
+| `08_outlook_local.py` | watch a local Outlook desktop inbox (Windows) |
 
 ## Docs
 

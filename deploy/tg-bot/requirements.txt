@@ -1,0 +1,8 @@
+# API moderna (>=0.9) installata dai repo pubblici su GitHub.
+# I tre repo sono pubblici, quindi il build non richiede alcun token.
+lazybridge[deepseek] @ git+https://github.com/selvaz/LazyBridge.git
+lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git
+lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git
+# Crawler web: l'extra [nlp] abilita la modalità CRAWL_CONTENT=ml (modelli locali).
+# La modalità "pure" (default) funziona anche senza extra. Repo pubblico → niente token.
+lazycrawler[nlp] @ git+https://github.com/selvaz/LazyCrawler.git

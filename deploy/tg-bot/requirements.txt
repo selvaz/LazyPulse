@@ -1,0 +1,5 @@
+# API moderna (>=0.9) installata dai repo pubblici su GitHub.
+# I tre repo sono pubblici, quindi il build non richiede alcun token.
+lazybridge[deepseek] @ git+https://github.com/selvaz/LazyBridge.git
+lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git
+lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git

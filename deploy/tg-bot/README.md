@@ -31,6 +31,7 @@ resto dalla dashboard web.
    - `OWNER_ID` = il tuo user_id
    - `DEEPSEEK_API_KEY` = la chiave DeepSeek
    - *(opzionali)* `MODEL=deepseek-v4-flash`, `SYSTEM_PROMPT=...`, `TICK_SECONDS=3`
+   - *(crawler)* `ENABLE_CRAWLER=1` (default), `CRAWL_CONTENT=pure` (o `ml`), `CRAWL_MAX_PAGES=5`, `CRAWL_MAX_DEPTH=1`
 4. **Volume persistente** (fondamentale): aggiungi un Volume con **Mount path = `/data`**.
    È dove vive `pulse.db` (offset Telegram + dedupe + task). Senza, a ogni redeploy
    il bot "dimentica" lo stato.
@@ -51,6 +52,24 @@ Modifica un file in `deploy/tg-bot/` dall'**app GitHub** (o `github.dev`) →
 **commit** → Railway/Render fanno **redeploy automatico**. Niente SSH.
 
 ---
+
+## Crawler web (LazyCrawler) — attivo, ma "educato"
+
+Il bot dà all'agente i tool `web_search` / `web_crawl`. È configurato per stare
+nei limiti di un uso lecito (e quindi accettato da Railway/Render):
+
+- **`respect_robots=True`** — rispetta `robots.txt` e il `Crawl-delay`. **Non disattivarlo.**
+- **rate-limit per host** sempre attivo (anti-martellamento).
+- **SSRF guard** attivo: non può colpire host privati/interni.
+- gira **solo quando lo chiedi tu** (solo l'owner attiva il worker), con `max_pages`/`max_depth` piccoli.
+- **cache-first**: i risultati restano in `/data/crawler.db` (sul Volume), meno richieste ripetute.
+
+Manopole utili (env var): `CRAWL_CONTENT=pure` (default, **zero token LLM**, leggero) o
+`ml` (riassunti/entità con **modelli locali**, più RAM); `ENABLE_CRAWLER=0` per spegnerlo.
+
+> Sul trial **512 MB** parti con `pure`. Evita: disattivare `respect_robots`,
+> alzare `max_pages` a decine/centinaia, o crawl massivi in loop → è quello che
+> Railway considera "scraping abusivo".
 
 ## Note & troubleshooting
 

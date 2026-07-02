@@ -293,6 +293,35 @@ async def test_completed_task_auto_replies_to_origin_chat() -> None:
     assert svc.sent == [{"chat_id": 42, "text": "pong"}]
 
 
+async def test_failing_reply_never_uncompletes_task_or_breaks_tick() -> None:
+    # The reply is best-effort: a Responder whose send raises must leave the
+    # task completed and the tick intact (pulse.reply_error is emitted).
+    from lazypulse import PulseAgent
+    from lazypulse.testing import FakeClock, MockEngine
+
+    class BrokenSendService(FakeService):
+        def send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+            raise RuntimeError("Telegram API down")
+
+    store = Store()
+    svc = BrokenSendService([_update(1, user_id=42, chat_id=42, text="ping")])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["pong"]),
+        store=store,
+        clock=FakeClock(),
+        policy=TelegramPolicy(owner_ids=[42]),
+        adapters=[inbox],
+    )
+    report = await pulse.tick_once()  # must not raise
+    assert report.completed == 1
+    from lazypulse.tasks import _iter_task_records
+
+    statuses = [raw["status"] for _key, raw in _iter_task_records(store)]
+    assert statuses == ["completed"]
+
+
 async def test_auto_reply_can_be_disabled() -> None:
     from lazypulse import PulseAgent
     from lazypulse.testing import FakeClock, MockEngine

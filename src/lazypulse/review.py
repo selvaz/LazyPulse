@@ -39,8 +39,9 @@ class StoreReviewerUI:
 
     async def prompt(self, task: str, *, tools: list[Any], output_type: type) -> str:
         review_id = str(uuid.uuid4())
+        req_key = store_keys.REVIEW_REQ.format(review_id=review_id)
         self.store.write(
-            store_keys.REVIEW_REQ.format(review_id=review_id),
+            req_key,
             {
                 "review_id": review_id,
                 "task": task,
@@ -54,21 +55,25 @@ class StoreReviewerUI:
         while time.monotonic() < deadline:
             resp = self.store.read(resp_key)
             if isinstance(resp, dict) and "text" in resp:
+                # Settled: drop both records so an always-on agent's Store
+                # doesn't accumulate one req/resp pair per review forever.
+                self.store.delete(req_key)
+                self.store.delete(resp_key)
                 return str(resp["text"])
             await asyncio.sleep(self.poll_interval)
+        # Timed out: withdraw the request so it stops showing as pending.
+        # A reviewer answering after this leaves an orphaned (tiny) response
+        # record; the worker it was meant for is already gone either way.
+        self.store.delete(req_key)
         raise TimeoutError(f"Review {review_id} timed out after {self.timeout}s")
 
 
 def pending_reviews(store: Store) -> list[dict[str, Any]]:
     """Return every review request that has no response yet."""
+    from lazypulse.tasks import _iter_records
+
     out: list[dict[str, Any]] = []
-    prefix = store_keys.REVIEW_REQ_PREFIX
-    for key in list(store.keys()):
-        if not key.startswith(prefix):
-            continue
-        req = store.read(key)
-        if not isinstance(req, dict):
-            continue
+    for _key, req in _iter_records(store, store_keys.REVIEW_REQ_PREFIX):
         review_id = req.get("review_id")
         if review_id is None:
             continue

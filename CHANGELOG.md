@@ -33,6 +33,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   range at construction time.
 
 ### Fixed
+- **`StoreReviewerUI` no longer leaks review records.** A settled review
+  deletes its request/response pair; a timed-out one withdraws its request
+  (it previously showed as pending forever and the Store grew one pair per
+  review, unbounded — `terminal_retention` only covers task records).
+  `pending_reviews` also uses the indexed `Store.items(prefix=)` scan now,
+  matching the task helpers.
+- **Corrupt cron records are surfaced.** `_process_cron` emits a
+  `pulse.cron_error` Session event (with the record key) instead of
+  silently skipping a record that can never fire again.
 - **The Telegram reply throttle is now race-free and fail-safe.** The
   per-chat window claim is a compare-and-swap (two tasks completing at once
   for the same chat can no longer both reply), and a send that delivers

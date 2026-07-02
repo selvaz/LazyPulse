@@ -25,7 +25,7 @@ jobs:
           # the public LazyTools repo, pinned to an immutable commit so CI is
           # reproducible. Bump the SHA when you need newer LazyTools; drop this
           # line once lazytoolkit ships to PyPI.
-          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@2ff9db02c19d3ed142877e6c0820cc9ce6f2ccce"
+          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@b40880ca6c5bed04619c9bbf60806809f9766671"
           pip install -e ".[dev]"
       - name: Pytest
         # Enforce a coverage floor (current coverage ~91%; floor set just below
@@ -46,7 +46,7 @@ jobs:
           # the public LazyTools repo, pinned to an immutable commit so CI is
           # reproducible. Bump the SHA when you need newer LazyTools; drop this
           # line once lazytoolkit ships to PyPI.
-          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@2ff9db02c19d3ed142877e6c0820cc9ce6f2ccce"
+          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@b40880ca6c5bed04619c9bbf60806809f9766671"
           pip install -e ".[dev]"
       - name: Ruff
         run: ruff check src tests

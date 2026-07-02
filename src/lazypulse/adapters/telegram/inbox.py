@@ -124,6 +124,8 @@ class TelegramInbox:
         for update_id, upd in keyed:
             event_id = f"telegram:{self._config.bot_id}:{update_id}"
             msg = upd.get("message")
+            if not isinstance(msg, dict):
+                msg = {}
             text = _message_text(msg)
             if text is None or store.read(store_keys.event_key(event_id)) is not None:
                 # Not a task (no text/caption) or already recorded in a prior
@@ -251,13 +253,11 @@ class TelegramInbox:
         )
 
 
-def _message_text(msg: Any) -> str | None:
+def _message_text(msg: dict[str, Any]) -> str | None:
     """The task text of an update's message: its ``text``, or the ``caption``
     of a media message — "analyse this" under a photo must not vanish
     silently. ``None`` for anything else (stickers, callbacks, membership
     changes, …), which the drain confirms past without emitting."""
-    if not isinstance(msg, dict):
-        return None
     for source_field in ("text", "caption"):
         value = msg.get(source_field)
         if isinstance(value, str) and value:

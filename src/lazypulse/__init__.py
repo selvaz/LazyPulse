@@ -63,6 +63,7 @@ __version__ = "0.3.0"
 if TYPE_CHECKING:
     from lazytools.connectors.gmail import GmailTools
     from lazytools.connectors.outlook import OutlookTools
+    from lazytools.connectors.telegram import TelegramTools
 
     from lazypulse.adapters.gmail import (
         GmailInbox,
@@ -80,7 +81,6 @@ if TYPE_CHECKING:
         TelegramInbox,
         TelegramInboxConfig,
         TelegramPolicy,
-        TelegramTools,
     )
     from lazypulse.adapters.webhook import WebhookAdapter
     from lazypulse.cron import CronTrigger

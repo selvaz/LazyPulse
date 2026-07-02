@@ -93,6 +93,12 @@ class OutlookInbox:
         # re-emit on every poll, so a crash between drain and record-write
         # cannot lose the message. Central dedupe means it still becomes at
         # most one task.
+        #
+        # Unlike the Telegram/Gmail inboxes, the client calls here are NOT
+        # offloaded via asyncio.to_thread: Outlook COM objects are apartment-
+        # threaded and must be used from the thread that initialised COM.
+        # These are local IPC calls (no network), so blocking the loop briefly
+        # is acceptable.
         out: list[InboundMessage] = []
         for message_id in self._client.list_message_ids(
             query=self._config.query, max_results=self._config.max_results

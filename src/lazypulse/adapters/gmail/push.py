@@ -42,6 +42,7 @@ Requires the ``webhook`` extra for the HTTP server pieces.
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import binascii
 import hmac
@@ -134,8 +135,11 @@ class GmailPushInbox(GmailInbox):
         state: dict[str, Any] = store.read(key) or {}
         now = self._clock()
 
+        # Every Gmail API round-trip below is offloaded to a thread: the client
+        # is synchronous and the workers' async I/O runs on this same event
+        # loop, so a slow call must never stall in-flight tasks.
         if cfg.topic_name is not None:
-            self._ensure_watch(state, now)
+            await self._ensure_watch(state, now)
             # _ensure_watch mutates state in place; persist below with the
             # rest of the changes (single write per drain keeps Store churn
             # at one key).
@@ -146,7 +150,7 @@ class GmailPushInbox(GmailInbox):
             unrecorded = [mid for mid in state.get("pending_ids", []) if store.read(store_keys.event_key(mid)) is None]
             if unrecorded:
                 store.write(key, state)
-                return [self._to_inbound(mid, self._client.get_message(mid)) for mid in unrecorded]
+                return [await self._fetch_inbound(mid) for mid in unrecorded]
             state["history_id"] = state.pop("pending_history_id")
             state.pop("pending_ids", None)
 
@@ -155,7 +159,7 @@ class GmailPushInbox(GmailInbox):
         # Anchoring counts as the initial sync: consume the notified flag
         # and stamp the sync time so an idle mailbox stays at zero calls.
         if not state.get("history_id"):
-            state["history_id"] = self._client.get_history_id()
+            state["history_id"] = await asyncio.to_thread(self._client.get_history_id)
             store.write(key, state)
             self._notified = False
             self._last_sync_at = now
@@ -167,8 +171,10 @@ class GmailPushInbox(GmailInbox):
         self._notified = False  # consume the flag before listing (see __init__)
 
         try:
-            ids, new_cursor = self._client.list_history_message_ids(
-                start_history_id=str(state["history_id"]), max_results=_HISTORY_BATCH
+            ids, new_cursor = await asyncio.to_thread(
+                self._client.list_history_message_ids,
+                start_history_id=str(state["history_id"]),
+                max_results=_HISTORY_BATCH,
             )
         except GmailHistoryExpired:
             # Cursor older than Gmail's retention window (e.g. the daemon
@@ -182,7 +188,7 @@ class GmailPushInbox(GmailInbox):
                 UserWarning,
                 stacklevel=2,
             )
-            state["history_id"] = self._client.get_history_id()
+            state["history_id"] = await asyncio.to_thread(self._client.get_history_id)
             state.pop("pending_history_id", None)
             state.pop("pending_ids", None)
             store.write(key, state)
@@ -201,12 +207,16 @@ class GmailPushInbox(GmailInbox):
             state["pending_ids"] = fresh
             state["pending_history_id"] = new_cursor
         store.write(key, state)
-        return [self._to_inbound(mid, self._client.get_message(mid)) for mid in fresh]
+        return [await self._fetch_inbound(mid) for mid in fresh]
+
+    async def _fetch_inbound(self, message_id: str) -> InboundMessage:
+        raw = await asyncio.to_thread(self._client.get_message, message_id)
+        return self._to_inbound(message_id, raw)
 
     # ------------------------------------------------------------------ #
     # Watch lifecycle
     # ------------------------------------------------------------------ #
-    def _ensure_watch(self, state: dict[str, Any], now: datetime) -> None:
+    async def _ensure_watch(self, state: dict[str, Any], now: datetime) -> None:
         cfg = self._push_config
         expiration_ms = state.get("watch_expiration_ms")
         if expiration_ms is not None:
@@ -214,7 +224,7 @@ class GmailPushInbox(GmailInbox):
             if remaining > cfg.renew_margin_seconds:
                 return
         assert cfg.topic_name is not None  # guarded by caller
-        resp = self._client.watch(topic_name=cfg.topic_name)
+        resp = await asyncio.to_thread(self._client.watch, topic_name=cfg.topic_name)
         try:
             state["watch_expiration_ms"] = int(resp.get("expiration", 0))
         except (TypeError, ValueError):

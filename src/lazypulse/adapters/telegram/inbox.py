@@ -18,6 +18,7 @@ without the ``telegram`` extra and is testable with a fake client.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -77,7 +78,12 @@ class TelegramInbox:
 
         # timeout=0 → short poll: return immediately with whatever is pending.
         # Long polling would block the tick loop; ``tick_seconds`` paces us.
-        updates = self._client.get_updates(offset=offset, timeout=0, limit=self._config.max_results)
+        # The client is synchronous (httpx.Client) and the workers' async I/O
+        # runs on this same event loop, so the network call is offloaded to a
+        # thread — a slow Bot API round-trip must never stall in-flight tasks.
+        updates = await asyncio.to_thread(
+            self._client.get_updates, offset=offset, timeout=0, limit=self._config.max_results
+        )
 
         out: list[InboundMessage] = []
         confirmed = offset
@@ -138,7 +144,9 @@ class TelegramInbox:
             return
         if not self._reply_allowed_now(chat_id, store):
             return  # within the per-chat throttle window — break the loop
-        self._client.send_message(chat_id=chat_id, text=text)
+        # Offloaded to a thread: the synchronous send must not stall the tick
+        # loop (see the matching note in ``drain``).
+        await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=text)
 
     def _reply_allowed_now(self, chat_id: Any, store: Store) -> bool:
         """Enforce the per-chat auto-reply rate limit. Returns ``False`` (and

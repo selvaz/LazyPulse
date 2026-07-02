@@ -177,6 +177,58 @@ def test_policy_bot_sender_never_trusted() -> None:
 # (lazytoolkit, 0.8). The inbox/policy/auto-reply tests below stay here.
 
 
+# --- Blocking client must not stall the event loop --------------------- #
+
+
+async def test_drain_offloads_blocking_client() -> None:
+    # The production client is synchronous httpx: a slow getUpdates must not
+    # freeze the tick loop's other coroutines (in-flight workers, recovery).
+    # A sentinel coroutine on the same loop must complete WHILE the blocking
+    # drain is in flight — it can only do so if drain offloads to a thread.
+    import asyncio
+    import time
+
+    class SlowService(FakeService):
+        def get_updates(self, *, offset: int, timeout: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+            time.sleep(0.2)  # blocking, like a slow network round-trip
+            return super().get_updates(offset=offset, timeout=timeout, limit=limit)
+
+    svc = SlowService([_update(1)])
+    loop_alive = asyncio.Event()
+
+    async def sentinel() -> None:
+        await asyncio.sleep(0.05)  # fires mid-drain only if the loop is free
+        loop_alive.set()
+
+    drain = asyncio.ensure_future(_inbox(svc).drain(store=Store(), session=None))
+    asyncio.ensure_future(sentinel())
+    await asyncio.wait_for(loop_alive.wait(), timeout=0.15)
+    assert len(await drain) == 1
+
+
+async def test_reply_offloads_blocking_client() -> None:
+    import asyncio
+    import time
+
+    class SlowService(FakeService):
+        def send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+            time.sleep(0.2)
+            return super().send_message(chat_id=chat_id, text=text)
+
+    svc = SlowService([])
+    loop_alive = asyncio.Event()
+
+    async def sentinel() -> None:
+        await asyncio.sleep(0.05)
+        loop_alive.set()
+
+    reply = asyncio.ensure_future(_inbox(svc).reply(_reply_record(), "hi", store=Store(), session=None))
+    asyncio.ensure_future(sentinel())
+    await asyncio.wait_for(loop_alive.wait(), timeout=0.15)
+    await reply
+    assert len(svc.sent) == 1
+
+
 # --- Conversational auto-reply (Responder) ----------------------------- #
 
 

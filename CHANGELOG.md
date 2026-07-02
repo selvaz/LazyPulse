@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Fixed
+- **Blocking network I/O no longer stalls the tick loop.** `TelegramInbox`
+  (`drain`/`reply`), `GmailInbox`, and `GmailPushInbox` called their
+  synchronous clients directly inside `async` methods running on the tick
+  loop's event loop — a slow API round-trip (up to the client's HTTP timeout)
+  froze every in-flight worker, intake, and crash recovery. All client calls
+  are now offloaded via `asyncio.to_thread`. `OutlookInbox` is deliberately
+  excluded: its COM client is apartment-threaded and local-IPC only.
+
 ### Removed
 - **The `lazypulse.adapters.telegram` deprecation shim is gone** (overdue: its
   own message promised removal in 0.3, and 0.3.0 removed the equivalent Gmail

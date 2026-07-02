@@ -804,7 +804,10 @@ class PulseAgent(Agent):
                 trigger = CronTrigger(raw["expr"], raw.get("tz", "UTC"))
                 next_dt = trigger.next(now)
                 updated = {**raw, "next_fire_at": next_dt.isoformat()}
-            except Exception:
+            except Exception as exc:
+                # A corrupt cron record (bad expr/tz) can never fire; surface
+                # it instead of skipping silently forever.
+                self._emit("pulse.cron_error", {"cron_key": key, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             # Claim this firing by advancing next_fire_at atomically.
             # If the CAS fails another agent process already owns it — skip.

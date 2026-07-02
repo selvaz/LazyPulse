@@ -7,6 +7,74 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`TrustLevel.OWNER_VERIFIED`** — channel-agnostic alias of
+  `OWNER_VERIFIED_EMAIL` (same enum member, same serialisation). The
+  canonical name carries "EMAIL" for historical reasons; non-email policies
+  (`TelegramPolicy`) now read naturally.
+
+### Deprecated (planned for 0.4)
+- **The email-specific fields on the base `PulsePolicy`** (`owner_emails`,
+  `allowed_external_senders`) will move to an email-policy base shared by
+  `GmailPolicy`/`OutlookPolicy`. They are meaningless on `TelegramPolicy`
+  (accepted and silently ignored today, a footgun). No behaviour change in
+  this release.
+
+### Changed
+- **`TelegramInbox` treats a media caption as the message text.** A photo
+  captioned "analyse this" previously vanished silently (the offset advanced
+  past it with no task and no feedback); it now becomes a task like a plain
+  text message. Updates with neither text nor caption are still skipped.
+- **`TelegramInbox` drain hardening.** A corrupt offset watermark in the
+  Store now refetches from scratch (the central `EVENT` dedupe absorbs the
+  replay) instead of failing every poll forever; updates without a usable
+  `update_id` are skipped instead of colliding on one shared event id.
+  `TelegramInboxConfig` rejects `max_results` outside the Bot API's 1–100
+  range at construction time.
+
+### Fixed
+- **`StoreReviewerUI` no longer leaks review records.** A settled review
+  deletes its request/response pair; a timed-out one withdraws its request
+  (it previously showed as pending forever and the Store grew one pair per
+  review, unbounded — `terminal_retention` only covers task records).
+  `pending_reviews` also uses the indexed `Store.items(prefix=)` scan now,
+  matching the task helpers.
+- **Corrupt cron records are surfaced.** `_process_cron` emits a
+  `pulse.cron_error` Session event (with the record key) instead of
+  silently skipping a record that can never fire again.
+- **The Telegram reply throttle is now race-free and fail-safe.** The
+  per-chat window claim is a compare-and-swap (two tasks completing at once
+  for the same chat can no longer both reply), and a send that delivers
+  nothing rolls the claim back instead of silently burning the chat's next
+  legitimate reply. `TelegramInbox` also accepts `clock=` for deterministic
+  testing, matching `PulseAgent`.
+- **Telegram auto-replies now survive the Bot API's 4096-char limit.**
+  `TelegramInbox.reply` sends `worker_text` chunked via the new
+  `lazytools.connectors.telegram.split_message` (paragraph/line/space-aware
+  splits); previously a long model answer made `sendMessage` fail and the
+  user heard nothing. One logical reply = one throttle check, regardless of
+  chunk count. The `lazytoolkit` pin is raised to `>=0.3.1,<0.4` for the
+  helper.
+- **Blocking network I/O no longer stalls the tick loop.** `TelegramInbox`
+  (`drain`/`reply`), `GmailInbox`, and `GmailPushInbox` called their
+  synchronous clients directly inside `async` methods running on the tick
+  loop's event loop — a slow API round-trip (up to the client's HTTP timeout)
+  froze every in-flight worker, intake, and crash recovery. All client calls
+  are now offloaded via `asyncio.to_thread`. `OutlookInbox` is deliberately
+  excluded: its COM client is apartment-threaded and local-IPC only.
+
+### Removed
+- **`PulseRecord.route`** — declared among the v0.2 fields but never written
+  by the runtime. Persisted records carrying the key still deserialise
+  (unknown keys are ignored).
+- **The `lazypulse.adapters.telegram` deprecation shim is gone** (overdue: its
+  own message promised removal in 0.3, and 0.3.0 removed the equivalent Gmail
+  shim). The lazy PEP 562 re-exports of `TelegramClient`, `TelegramService`,
+  `TelegramTools`, and `TelegramSendBlocked` (moved to
+  `lazytools.connectors.telegram` in 0.2) now raise `AttributeError` instead of
+  emitting a `DeprecationWarning`. Import from `lazytools.connectors.telegram`
+  directly; the `lazypulse.TelegramTools` convenience re-export is unaffected.
+
 ### Added — local Outlook desktop intake (low-setup alternative to Gmail)
 - **`OutlookInbox` / `OutlookInboxConfig` / `OutlookPolicy`** (new `outlook`
   extra → `lazytoolkit[outlook]`). Polls the copy of Outlook **already running

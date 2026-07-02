@@ -1,7 +1,10 @@
 """Telegram polling adapter.
 
 Polls the Bot API for new updates via ``getUpdates`` and emits one
-:class:`~lazypulse.models.InboundMessage` per text message.
+:class:`~lazypulse.models.InboundMessage` per text message. A media message
+with a caption counts: the caption is the task text, so "analyse this" under
+a photo is not silently dropped. Updates with neither (stickers, callbacks,
+membership changes, …) are skipped and confirmed past.
 
 **At-least-once.** Telegram discards updates once a higher ``offset`` confirms
 them, so losing the offset-versus-recorded ordering would lose mail. The
@@ -18,16 +21,19 @@ without the ``telegram`` extra and is testable with a fake client.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from lazytools.connectors.telegram.client import TelegramService
+from lazytools.connectors.telegram.client import TelegramService, split_message
 
 from lazypulse import store_keys
 from lazypulse.models import ActionClass, InboundMessage
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from lazybridge import Session, Store
 
     from lazypulse.models import PulseRecord
@@ -41,6 +47,7 @@ class TelegramInboxConfig:
     #: the Store (e.g. the bot username). Two PulseAgents on one Store must use
     #: distinct ``bot_id``s if they poll different bots.
     bot_id: str
+    #: Updates fetched per poll. The Bot API caps ``getUpdates`` at 100.
     max_results: int = 100
     default_action: ActionClass = ActionClass.READ_PUBLIC
     #: When True (default), a completed task's worker output is sent back to
@@ -61,49 +68,75 @@ class TelegramInboxConfig:
     #: (per bot + chat) so it holds across ticks, restarts, and processes.
     reply_min_interval_seconds: float = 0.0
 
+    def __post_init__(self) -> None:
+        if not 1 <= self.max_results <= 100:
+            raise ValueError(f"max_results must be in 1..100 (the Bot API getUpdates limit), got {self.max_results}")
+
 
 class TelegramInbox:
     """An :class:`~lazypulse.Adapter` that polls a Telegram bot for updates."""
 
-    def __init__(self, client: TelegramService, config: TelegramInboxConfig, *, name: str = "telegram") -> None:
+    def __init__(
+        self,
+        client: TelegramService,
+        config: TelegramInboxConfig,
+        *,
+        name: str = "telegram",
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.name = name
         self._client = client
         self._config = config
+        self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
 
     async def drain(self, *, store: Store, session: Session | None = None) -> list[InboundMessage]:
         offset_key = store_keys.TG_OFFSET.format(bot=self._config.bot_id)
         stored = store.read(offset_key)
-        offset = int(stored["offset"]) if isinstance(stored, dict) and "offset" in stored else 0
+        offset = 0
+        if isinstance(stored, dict):
+            try:
+                offset = int(stored["offset"])
+            except (KeyError, TypeError, ValueError):
+                offset = 0  # corrupt watermark: refetch from scratch; central EVENT dedupe absorbs the replay
 
         # timeout=0 → short poll: return immediately with whatever is pending.
         # Long polling would block the tick loop; ``tick_seconds`` paces us.
-        updates = self._client.get_updates(offset=offset, timeout=0, limit=self._config.max_results)
+        # The client is synchronous (httpx.Client) and the workers' async I/O
+        # runs on this same event loop, so the network call is offloaded to a
+        # thread — a slow Bot API round-trip must never stall in-flight tasks.
+        updates = await asyncio.to_thread(
+            self._client.get_updates, offset=offset, timeout=0, limit=self._config.max_results
+        )
+
+        # Updates without a usable update_id can be neither confirmed nor
+        # deduped (they would all collide on one event id) — skip them.
+        keyed: list[tuple[int, dict[str, Any]]] = []
+        for upd in updates:
+            try:
+                keyed.append((int(upd["update_id"]), upd))
+            except (KeyError, TypeError, ValueError):
+                continue
+        keyed.sort(key=lambda pair: pair[0])
 
         out: list[InboundMessage] = []
         confirmed = offset
         confirming = True  # advance the watermark only across a recorded/skippable prefix
-        for upd in sorted(updates, key=lambda u: int(u.get("update_id", 0))):
-            update_id = int(upd.get("update_id", 0))
+        for update_id, upd in keyed:
             event_id = f"telegram:{self._config.bot_id}:{update_id}"
             msg = upd.get("message")
-
-            if not isinstance(msg, dict) or not isinstance(msg.get("text"), str):
-                # Non-text update (media, callback, membership change, …): not a
-                # task. Confirm past it only while the prefix is still intact.
+            if not isinstance(msg, dict):
+                msg = {}
+            text = _message_text(msg)
+            if text is None or store.read(store_keys.event_key(event_id)) is not None:
+                # Not a task (no text/caption) or already recorded in a prior
+                # tick: confirm past it while the prefix is still intact.
                 if confirming:
                     confirmed = update_id + 1
                 continue
-
-            if store.read(store_keys.event_key(event_id)) is not None:
-                # Already recorded in a prior tick → safe to confirm past it.
-                if confirming:
-                    confirmed = update_id + 1
-                continue
-
             # Unrecorded text message: emit it and stop advancing the watermark
             # so a crash before the PulseAgent records it re-fetches it.
             confirming = False
-            out.append(self._to_inbound(event_id, msg))
+            out.append(self._to_inbound(event_id, msg, text))
 
         if confirmed != offset:
             store.write(offset_key, {"offset": confirmed})
@@ -136,19 +169,45 @@ class TelegramInbox:
         chat_id = meta.get("chat_id")
         if chat_id is None or not text:
             return
-        if not self._reply_allowed_now(chat_id, store):
+        claimed, claim, previous = self._claim_reply_window(chat_id, store)
+        if not claimed:
             return  # within the per-chat throttle window — break the loop
-        self._client.send_message(chat_id=chat_id, text=text)
+        # One logical reply, one throttle claim — but chunked to the Bot API's
+        # 4096-char sendMessage limit (a long worker answer would otherwise
+        # fail outright and the user would hear nothing). Each send is
+        # offloaded to a thread so it never stalls the tick loop (see the
+        # matching note in ``drain``).
+        sent_any = False
+        try:
+            for chunk in split_message(text):
+                await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=chunk)
+                sent_any = True
+        except BaseException:
+            # Nothing reached the chat → give the window back so the failed
+            # attempt doesn't silently swallow the chat's next legitimate
+            # reply. If at least one chunk landed, the claim stands: a reply
+            # DID go into the chat, and re-opening the window would defeat
+            # the anti-amplification purpose of the throttle.
+            if not sent_any and claim is not None:
+                self._rollback_reply_claim(chat_id, store, claim, previous)
+            raise
 
-    def _reply_allowed_now(self, chat_id: Any, store: Store) -> bool:
-        """Enforce the per-chat auto-reply rate limit. Returns ``False`` (and
-        records nothing) when a reply would fire within
-        ``reply_min_interval_seconds`` of the previous one to this chat."""
+    def _claim_reply_window(self, chat_id: Any, store: Store) -> tuple[bool, dict[str, str] | None, Any]:
+        """Claim the per-chat auto-reply throttle window.
+
+        Returns ``(claimed, claim, previous_value)`` — ``claim`` is the
+        watermark this call wrote (``None`` when throttling is off), kept so a
+        failed send can roll back exactly its own claim. ``claimed`` is
+        ``False`` when a reply would fire within
+        ``reply_min_interval_seconds`` of the previous one to this chat — or
+        when a concurrent reply claimed the window first: the write is a
+        compare-and-swap against the value we read, so two tasks completing
+        at once for the same chat can never both pass."""
         interval = self._config.reply_min_interval_seconds
         if interval <= 0:
-            return True
+            return True, None, None
         key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
-        now = datetime.now(UTC)
+        now = self._clock()
         last = store.read(key)
         if isinstance(last, dict) and isinstance(last.get("at"), str):
             try:
@@ -156,22 +215,35 @@ class TelegramInbox:
             except ValueError:
                 last_at = None
             if last_at is not None and (now - last_at).total_seconds() < interval:
-                return False
-        store.write(key, {"at": now.isoformat()})
-        return True
+                return False, None, last
+        claim = {"at": now.isoformat()}
+        if not store.compare_and_swap(key, last, claim):
+            return False, None, last  # lost the race to a concurrent reply
+        return True, claim, last
 
-    def _to_inbound(self, event_id: str, msg: dict[str, Any]) -> InboundMessage:
+    def _rollback_reply_claim(self, chat_id: Any, store: Store, claim: dict[str, str], previous: Any) -> None:
+        """Give the window back after a send that delivered nothing — but only
+        if our claim is still the current watermark. The CAS guards the case
+        where the failing send outlived the window (possible when
+        ``reply_min_interval_seconds`` is shorter than the send timeout) and a
+        newer reply legitimately claimed meanwhile: that claim must not be
+        erased. ``previous=None`` restores to ``{}``, which the window check
+        treats as no watermark."""
+        key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
+        store.compare_and_swap(key, claim, previous if previous is not None else {})
+
+    def _to_inbound(self, event_id: str, msg: dict[str, Any], text: str) -> InboundMessage:
         frm = msg.get("from") or {}
         chat = msg.get("chat") or {}
         user_id = frm.get("id")
         date = msg.get("date")
-        received = datetime.fromtimestamp(int(date), tz=UTC) if isinstance(date, int | float) else datetime.now(UTC)
+        received = datetime.fromtimestamp(int(date), tz=UTC) if isinstance(date, int | float) else self._clock()
         return InboundMessage(
             source=self.name,
             message_id=event_id,
             received_at=received,
             sender_raw=str(user_id) if user_id is not None else None,
-            text=msg.get("text", ""),
+            text=text,
             requested_action=self._config.default_action,
             metadata={
                 "user_id": user_id,
@@ -182,3 +254,15 @@ class TelegramInbox:
                 "telegram_message_id": msg.get("message_id"),
             },
         )
+
+
+def _message_text(msg: dict[str, Any]) -> str | None:
+    """The task text of an update's message: its ``text``, or the ``caption``
+    of a media message — "analyse this" under a photo must not vanish
+    silently. ``None`` for anything else (stickers, callbacks, membership
+    changes, …), which the drain confirms past without emitting."""
+    for source_field in ("text", "caption"):
+        value = msg.get(source_field)
+        if isinstance(value, str) and value:
+            return value
+    return None

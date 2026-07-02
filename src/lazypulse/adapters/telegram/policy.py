@@ -8,9 +8,8 @@ header to forge — the numeric user id is authoritative.
 
 * A message from a bot account, or with no resolvable sender id, is never
   trusted (``UNKNOWN``).
-* A user id in ``owner_ids`` gets ``OWNER_VERIFIED_EMAIL`` — the "verified
-  owner" trust tier (the enum name is historical, from the Gmail origin; it
-  denotes the tier, not the channel).
+* A user id in ``owner_ids`` gets ``OWNER_VERIFIED`` (the channel-agnostic
+  alias of ``OWNER_VERIFIED_EMAIL`` — same tier, same serialisation).
 * A user id in ``allowed_user_ids`` gets ``EXTERNAL_VERIFIED``.
 * Everyone else is ``UNKNOWN`` → rejected before the worker runs.
 
@@ -46,7 +45,7 @@ class TelegramPolicy(PulsePolicy):
                 notes="bot sender" if is_bot else "no sender id",
             )
         if user_id in self.owner_ids:
-            return Identity(sender=sender, trust=TrustLevel.OWNER_VERIFIED_EMAIL, auth_signals=signals)
+            return Identity(sender=sender, trust=TrustLevel.OWNER_VERIFIED, auth_signals=signals)
         if user_id in self.allowed_user_ids:
             return Identity(sender=sender, trust=TrustLevel.EXTERNAL_VERIFIED, auth_signals=signals)
         return Identity(sender=sender, trust=TrustLevel.UNKNOWN, auth_signals=signals)

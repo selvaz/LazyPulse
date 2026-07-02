@@ -27,6 +27,11 @@ class TrustLevel(StrEnum):
     EXTERNAL_VERIFIED = "external_verified"
     OWNER_CLAIM_UNVERIFIED = "owner_claim_unverified"
     OWNER_VERIFIED_EMAIL = "owner_verified_email"
+    #: Alias of :attr:`OWNER_VERIFIED_EMAIL`. The canonical name carries
+    #: "EMAIL" for historical reasons (the Gmail origin); the tier itself is
+    #: channel-agnostic — e.g. ``TelegramPolicy`` grants it to ``owner_ids``.
+    #: Prefer this alias in non-email policies. Serialises identically.
+    OWNER_VERIFIED = "owner_verified_email"
     APPROVED_SESSION = "approved_session"
     SYSTEM = "system"
 
@@ -128,7 +133,6 @@ class PulseRecord(BaseModel):
     attempt: int = 0
     next_retry_at: datetime | None = None
     rate_limited: bool = False
-    route: str | None = None
     error_type: str | None = None
 
 

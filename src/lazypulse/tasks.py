@@ -25,35 +25,42 @@ if TYPE_CHECKING:
 _TERMINAL_STATUSES = frozenset({"completed", "rejected", "failed"})
 
 
-def _iter_task_records(store: Store) -> list[tuple[str, dict[str, Any]]]:
-    """Yield ``(key, raw)`` for every task record in the Store.
+def _iter_records(store: Store, prefix: str) -> list[tuple[str, dict[str, Any]]]:
+    """Yield ``(key, raw)`` for every dict record under ``prefix``.
 
     Uses the indexed ``Store.items(prefix=)`` B-tree range scan when available
-    (lazybridge >= 0.9.1), giving O(M) in the number of task keys rather than
-    O(N) over the whole keyspace. Mirrors ``PulseAgent._scan_records`` (which
-    delegates here) so the review helpers and the tick loop share one scan
-    strategy. Falls back to a full ``keys()`` walk when the store has no
-    ``items`` at all, or exposes an ``items()`` that predates the ``prefix=``
-    keyword (an older lazybridge in the supported ``>=0.7.9`` range, or a
-    duck-typed test store) — probed by catching ``TypeError`` on the call so an
-    unsupported keyword degrades to the slower scan instead of failing outright.
+    (lazybridge >= 0.9.1), giving O(M) in the number of matching keys rather
+    than O(N) over the whole keyspace. Falls back to a full ``keys()`` walk
+    when the store has no ``items`` at all, or exposes an ``items()`` that
+    predates the ``prefix=`` keyword (an older lazybridge in the supported
+    ``>=0.7.9`` range, or a duck-typed test store) — probed by catching
+    ``TypeError`` on the call so an unsupported keyword degrades to the slower
+    scan instead of failing outright.
     """
     items = getattr(store, "items", None)
     if items is not None:
         try:
-            pairs = items(prefix=store_keys.TASK_PREFIX)
+            pairs = items(prefix=prefix)
         except TypeError:
             pairs = None  # items() exists but doesn't accept prefix= — fall back
         if pairs is not None:
             return [(k, v) for k, v in pairs if isinstance(v, dict)]
     out: list[tuple[str, dict[str, Any]]] = []
     for key in list(store.keys()):
-        if not key.startswith(store_keys.TASK_PREFIX):
+        if not key.startswith(prefix):
             continue
         raw = store.read(key)
         if isinstance(raw, dict):
             out.append((key, raw))
     return out
+
+
+def _iter_task_records(store: Store) -> list[tuple[str, dict[str, Any]]]:
+    """Yield ``(key, raw)`` for every task record in the Store.
+
+    Mirrors ``PulseAgent._scan_records`` (which delegates here) so the review
+    helpers and the tick loop share one scan strategy."""
+    return _iter_records(store, store_keys.TASK_PREFIX)
 
 
 def pending_tasks(store: Store) -> list[PulseRecord]:

@@ -13,6 +13,7 @@ so it imports without the Gmail extra and is testable with a fake client.
 
 from __future__ import annotations
 
+import asyncio
 import warnings
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
@@ -78,13 +79,17 @@ class GmailInbox:
         # re-emit on every poll, so a crash between drain and record-write
         # cannot lose the message. Central dedupe means it still becomes at
         # most one task.
+        # The client is synchronous and the workers' async I/O runs on this
+        # same event loop, so every Gmail API round-trip is offloaded to a
+        # thread — a slow call must never stall in-flight tasks.
         out: list[InboundMessage] = []
-        for message_id in self._client.list_message_ids(
-            query=self._config.query, max_results=self._config.max_results
-        ):
+        message_ids = await asyncio.to_thread(
+            self._client.list_message_ids, query=self._config.query, max_results=self._config.max_results
+        )
+        for message_id in message_ids:
             if store.read(store_keys.event_key(message_id)) is not None:
                 continue
-            raw = self._client.get_message(message_id)
+            raw = await asyncio.to_thread(self._client.get_message, message_id)
             out.append(self._to_inbound(message_id, raw))
         return out
 

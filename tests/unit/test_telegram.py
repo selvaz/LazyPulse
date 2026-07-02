@@ -337,6 +337,28 @@ async def test_auto_reply_rate_limit_breaks_loop() -> None:
     assert svc.sent == [{"chat_id": 42, "text": "first"}, {"chat_id": 42, "text": "third"}]
 
 
+async def test_reply_chunks_long_output() -> None:
+    # A worker answer over the Bot API's 4096-char limit is split into
+    # multiple sends instead of failing outright.
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT))
+    await inbox.reply(_reply_record(chat_id=42), "a" * 5000, store=Store(), session=None)
+    assert [len(s["text"]) for s in svc.sent] == [4096, 904]
+    assert all(s["chat_id"] == 42 for s in svc.sent)
+
+
+async def test_reply_chunks_count_as_one_throttled_reply() -> None:
+    # The per-chat throttle gates the logical reply, not each chunk: a long
+    # chunked answer goes out in full, and only the NEXT reply is throttled.
+    store = Store()
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0))
+    await inbox.reply(_reply_record(chat_id=42), "a" * 5000, store=store, session=None)
+    assert len(svc.sent) == 2  # both chunks sent
+    await inbox.reply(_reply_record(chat_id=42), "next", store=store, session=None)
+    assert len(svc.sent) == 2  # follow-up reply throttled
+
+
 async def test_rate_limit_disabled_by_default() -> None:
     # With the default interval (0.0), consecutive replies are not throttled.
     store = Store()

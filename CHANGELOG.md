@@ -8,6 +8,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **Telegram auto-replies now survive the Bot API's 4096-char limit.**
+  `TelegramInbox.reply` sends `worker_text` chunked via the new
+  `lazytools.connectors.telegram.split_message` (paragraph/line/space-aware
+  splits); previously a long model answer made `sendMessage` fail and the
+  user heard nothing. One logical reply = one throttle check, regardless of
+  chunk count. The `lazytoolkit` pin is raised to `>=0.3.1,<0.4` for the
+  helper.
 - **Blocking network I/O no longer stalls the tick loop.** `TelegramInbox`
   (`drain`/`reply`), `GmailInbox`, and `GmailPushInbox` called their
   synchronous clients directly inside `async` methods running on the tick

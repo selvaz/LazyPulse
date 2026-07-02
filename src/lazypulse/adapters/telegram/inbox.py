@@ -23,7 +23,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from lazytools.connectors.telegram.client import TelegramService
+from lazytools.connectors.telegram.client import TelegramService, split_message
 
 from lazypulse import store_keys
 from lazypulse.models import ActionClass, InboundMessage
@@ -144,9 +144,13 @@ class TelegramInbox:
             return
         if not self._reply_allowed_now(chat_id, store):
             return  # within the per-chat throttle window — break the loop
-        # Offloaded to a thread: the synchronous send must not stall the tick
-        # loop (see the matching note in ``drain``).
-        await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=text)
+        # One logical reply, one throttle check — but chunked to the Bot API's
+        # 4096-char sendMessage limit (a long worker answer would otherwise
+        # fail outright and the user would hear nothing). Each send is
+        # offloaded to a thread so it never stalls the tick loop (see the
+        # matching note in ``drain``).
+        for chunk in split_message(text):
+            await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=chunk)
 
     def _reply_allowed_now(self, chat_id: Any, store: Store) -> bool:
         """Enforce the per-chat auto-reply rate limit. Returns ``False`` (and

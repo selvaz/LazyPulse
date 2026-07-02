@@ -21,8 +21,15 @@ def test_v01_json_deserialises() -> None:
     assert r.attempt == 0
     assert r.next_retry_at is None
     assert r.rate_limited is False
-    assert r.route is None
     assert r.error_type is None
+
+
+def test_record_with_removed_route_field_deserialises() -> None:
+    # ``route`` was declared in 0.2/0.3 but never written by the runtime; it
+    # was removed. Persisted records that carry it must still load (pydantic
+    # ignores unknown keys by default).
+    r = PulseRecord.model_validate({**_v01_record(), "route": "some-route"})
+    assert not hasattr(r, "route")
 
 
 def test_v01_json_roundtrip() -> None:

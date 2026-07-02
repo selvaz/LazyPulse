@@ -7,6 +7,19 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`TrustLevel.OWNER_VERIFIED`** — channel-agnostic alias of
+  `OWNER_VERIFIED_EMAIL` (same enum member, same serialisation). The
+  canonical name carries "EMAIL" for historical reasons; non-email policies
+  (`TelegramPolicy`) now read naturally.
+
+### Deprecated (planned for 0.4)
+- **The email-specific fields on the base `PulsePolicy`** (`owner_emails`,
+  `allowed_external_senders`) will move to an email-policy base shared by
+  `GmailPolicy`/`OutlookPolicy`. They are meaningless on `TelegramPolicy`
+  (accepted and silently ignored today, a footgun). No behaviour change in
+  this release.
+
 ### Changed
 - **`TelegramInbox` treats a media caption as the message text.** A photo
   captioned "analyse this" previously vanished silently (the offset advanced
@@ -42,6 +55,9 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   excluded: its COM client is apartment-threaded and local-IPC only.
 
 ### Removed
+- **`PulseRecord.route`** — declared among the v0.2 fields but never written
+  by the runtime. Persisted records carrying the key still deserialise
+  (unknown keys are ignored).
 - **The `lazypulse.adapters.telegram` deprecation shim is gone** (overdue: its
   own message promised removal in 0.3, and 0.3.0 removed the equivalent Gmail
   shim). The lazy PEP 562 re-exports of `TelegramClient`, `TelegramService`,

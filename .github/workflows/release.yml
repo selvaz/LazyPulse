@@ -32,7 +32,7 @@ jobs:
           python -m pip install --upgrade pip
           # lazytoolkit is not on PyPI yet; install the sibling from the public
           # LazyTools repo, pinned to the same commit the other workflows use.
-          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@b40880ca6c5bed04619c9bbf60806809f9766671"
+          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@3dc5c7dca10d69dd12c97b8dc6a54da8423706d5"
           pip install -e ".[dev]"
       - name: Ruff
         run: ruff check src tests

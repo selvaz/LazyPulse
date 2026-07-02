@@ -320,21 +320,74 @@ async def test_auto_reply_skips_bot_origin_by_default() -> None:
 
 
 async def test_auto_reply_rate_limit_breaks_loop() -> None:
-    from datetime import UTC, datetime, timedelta
+    from lazypulse.testing import FakeClock
 
     store = Store()
     svc = FakeService([])
-    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0))
+    clock = FakeClock()
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0), clock=clock)
     rec = _reply_record(chat_id=42)
     await inbox.reply(rec, "first", store=store, session=None)
     # A second reply within the window is dropped — the circuit breaker.
     await inbox.reply(rec, "second", store=store, session=None)
     assert svc.sent == [{"chat_id": 42, "text": "first"}]
-    # Age the watermark past the window → the next reply is allowed again.
-    key = store_keys.tg_reply_throttle_key(BOT, "42")
-    store.write(key, {"at": (datetime.now(UTC) - timedelta(seconds=120)).isoformat()})
+    # Once the window has elapsed the next reply is allowed again.
+    clock.advance(61.0)
     await inbox.reply(rec, "third", store=store, session=None)
     assert svc.sent == [{"chat_id": 42, "text": "first"}, {"chat_id": 42, "text": "third"}]
+
+
+async def test_throttle_claim_is_cas_guarded_against_concurrent_reply() -> None:
+    # Two tasks for the same chat completing at once must not both pass the
+    # throttle. Simulate the race deterministically: a competing reply lands
+    # its watermark between our read and our write — the CAS must lose and
+    # the reply must be dropped.
+    from datetime import UTC, datetime
+
+    class RacyStore(Store):
+        def __init__(self) -> None:
+            super().__init__()
+            self.raced = False
+
+        def compare_and_swap(self, key: str, expected: Any, new: Any) -> bool:
+            if not self.raced and key.startswith("pulse:telegram:reply_throttle:"):
+                self.raced = True
+                super().write(key, {"at": datetime.now(UTC).isoformat()})
+            return super().compare_and_swap(key, expected, new)
+
+    store = RacyStore()
+    svc = FakeService([])
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0))
+    await inbox.reply(_reply_record(chat_id=42), "hi", store=store, session=None)
+    assert svc.sent == []  # lost the claim race → no send
+
+
+async def test_failed_send_does_not_burn_throttle_window() -> None:
+    # A send that delivers nothing must give the window back: the next
+    # legitimate reply within the interval still goes out.
+    import pytest
+
+    class FailOnceService(FakeService):
+        def __init__(self) -> None:
+            super().__init__([])
+            self.fail_next = True
+
+        def send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+            if self.fail_next:
+                self.fail_next = False
+                raise RuntimeError("Telegram API down")
+            return super().send_message(chat_id=chat_id, text=text)
+
+    store = Store()
+    svc = FailOnceService()
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=60.0))
+    rec = _reply_record(chat_id=42)
+    with pytest.raises(RuntimeError):
+        await inbox.reply(rec, "lost", store=store, session=None)
+    assert svc.sent == []
+    # The failed attempt did not consume the window.
+    await inbox.reply(rec, "retry", store=store, session=None)
+    assert svc.sent == [{"chat_id": 42, "text": "retry"}]
 
 
 async def test_reply_chunks_long_output() -> None:

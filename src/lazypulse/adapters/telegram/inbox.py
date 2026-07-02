@@ -29,6 +29,8 @@ from lazypulse import store_keys
 from lazypulse.models import ActionClass, InboundMessage
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from lazybridge import Session, Store
 
     from lazypulse.models import PulseRecord
@@ -66,10 +68,18 @@ class TelegramInboxConfig:
 class TelegramInbox:
     """An :class:`~lazypulse.Adapter` that polls a Telegram bot for updates."""
 
-    def __init__(self, client: TelegramService, config: TelegramInboxConfig, *, name: str = "telegram") -> None:
+    def __init__(
+        self,
+        client: TelegramService,
+        config: TelegramInboxConfig,
+        *,
+        name: str = "telegram",
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
         self.name = name
         self._client = client
         self._config = config
+        self._clock: Callable[[], datetime] = clock or (lambda: datetime.now(UTC))
 
     async def drain(self, *, store: Store, session: Session | None = None) -> list[InboundMessage]:
         offset_key = store_keys.TG_OFFSET.format(bot=self._config.bot_id)
@@ -142,25 +152,42 @@ class TelegramInbox:
         chat_id = meta.get("chat_id")
         if chat_id is None or not text:
             return
-        if not self._reply_allowed_now(chat_id, store):
+        claimed, previous = self._claim_reply_window(chat_id, store)
+        if not claimed:
             return  # within the per-chat throttle window — break the loop
-        # One logical reply, one throttle check — but chunked to the Bot API's
+        # One logical reply, one throttle claim — but chunked to the Bot API's
         # 4096-char sendMessage limit (a long worker answer would otherwise
         # fail outright and the user would hear nothing). Each send is
         # offloaded to a thread so it never stalls the tick loop (see the
         # matching note in ``drain``).
-        for chunk in split_message(text):
-            await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=chunk)
+        sent_any = False
+        try:
+            for chunk in split_message(text):
+                await asyncio.to_thread(self._client.send_message, chat_id=chat_id, text=chunk)
+                sent_any = True
+        except BaseException:
+            # Nothing reached the chat → give the window back so the failed
+            # attempt doesn't silently swallow the chat's next legitimate
+            # reply. If at least one chunk landed, the claim stands: a reply
+            # DID go into the chat, and re-opening the window would defeat
+            # the anti-amplification purpose of the throttle.
+            if not sent_any:
+                self._restore_reply_window(chat_id, store, previous)
+            raise
 
-    def _reply_allowed_now(self, chat_id: Any, store: Store) -> bool:
-        """Enforce the per-chat auto-reply rate limit. Returns ``False`` (and
-        records nothing) when a reply would fire within
-        ``reply_min_interval_seconds`` of the previous one to this chat."""
+    def _claim_reply_window(self, chat_id: Any, store: Store) -> tuple[bool, Any]:
+        """Claim the per-chat auto-reply throttle window.
+
+        Returns ``(claimed, previous_value)``. ``False`` when a reply would
+        fire within ``reply_min_interval_seconds`` of the previous one to this
+        chat — or when a concurrent reply claimed the window first: the write
+        is a compare-and-swap against the value we read, so two tasks
+        completing at once for the same chat can never both pass."""
         interval = self._config.reply_min_interval_seconds
         if interval <= 0:
-            return True
+            return True, None
         key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
-        now = datetime.now(UTC)
+        now = self._clock()
         last = store.read(key)
         if isinstance(last, dict) and isinstance(last.get("at"), str):
             try:
@@ -168,9 +195,22 @@ class TelegramInbox:
             except ValueError:
                 last_at = None
             if last_at is not None and (now - last_at).total_seconds() < interval:
-                return False
-        store.write(key, {"at": now.isoformat()})
-        return True
+                return False, last
+        if not store.compare_and_swap(key, last, {"at": now.isoformat()}):
+            return False, last  # lost the race to a concurrent reply
+        return True, last
+
+    def _restore_reply_window(self, chat_id: Any, store: Store, previous: Any) -> None:
+        """Best-effort rollback of a claimed throttle window after a send that
+        delivered nothing. Between our claim and this rollback no other reply
+        can claim (they see our fresh watermark), so a plain write is safe."""
+        if self._config.reply_min_interval_seconds <= 0:
+            return
+        key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
+        if previous is None:
+            store.delete(key)
+        else:
+            store.write(key, previous)
 
     def _to_inbound(self, event_id: str, msg: dict[str, Any]) -> InboundMessage:
         frm = msg.get("from") or {}

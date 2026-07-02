@@ -8,6 +8,12 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Fixed
+- **The Telegram reply throttle is now race-free and fail-safe.** The
+  per-chat window claim is a compare-and-swap (two tasks completing at once
+  for the same chat can no longer both reply), and a send that delivers
+  nothing rolls the claim back instead of silently burning the chat's next
+  legitimate reply. `TelegramInbox` also accepts `clock=` for deterministic
+  testing, matching `PulseAgent`.
 - **Telegram auto-replies now survive the Bot API's 4096-char limit.**
   `TelegramInbox.reply` sends `worker_text` chunked via the new
   `lazytools.connectors.telegram.split_message` (paragraph/line/space-aware

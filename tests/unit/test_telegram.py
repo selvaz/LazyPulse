@@ -484,6 +484,37 @@ async def test_reply_chunks_count_as_one_throttled_reply() -> None:
     assert len(svc.sent) == 2  # follow-up reply throttled
 
 
+async def test_failed_send_rollback_never_erases_newer_claim() -> None:
+    # When the failing send outlives the throttle window (interval shorter
+    # than the send timeout), a newer reply can legitimately claim meanwhile.
+    # The rollback must be a CAS on OUR claim so it never erases that newer
+    # claim and reopens the window.
+    from datetime import UTC, datetime
+
+    import pytest
+
+    newer_claim = {"at": datetime.now(UTC).isoformat()}
+
+    class SlowFailService(FakeService):
+        def __init__(self, store: Store) -> None:
+            super().__init__([])
+            self._store = store
+
+        def send_message(self, *, chat_id: int | str, text: str) -> dict[str, Any]:
+            # Simulate a concurrent reply claiming the window while this
+            # send is still in flight, then fail.
+            self._store.write(store_keys.tg_reply_throttle_key(BOT, str(chat_id)), newer_claim)
+            raise RuntimeError("Telegram API timeout")
+
+    store = Store()
+    svc = SlowFailService(store)
+    inbox = TelegramInbox(svc, TelegramInboxConfig(bot_id=BOT, reply_min_interval_seconds=1.0))
+    with pytest.raises(RuntimeError):
+        await inbox.reply(_reply_record(chat_id=42), "lost", store=store, session=None)
+    # The newer claim survives the rollback: the window stays closed.
+    assert store.read(store_keys.tg_reply_throttle_key(BOT, "42")) == newer_claim
+
+
 async def test_rate_limit_disabled_by_default() -> None:
     # With the default interval (0.0), consecutive replies are not throttled.
     store = Store()

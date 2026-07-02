@@ -169,7 +169,7 @@ class TelegramInbox:
         chat_id = meta.get("chat_id")
         if chat_id is None or not text:
             return
-        claimed, previous = self._claim_reply_window(chat_id, store)
+        claimed, claim, previous = self._claim_reply_window(chat_id, store)
         if not claimed:
             return  # within the per-chat throttle window — break the loop
         # One logical reply, one throttle claim — but chunked to the Bot API's
@@ -188,21 +188,24 @@ class TelegramInbox:
             # reply. If at least one chunk landed, the claim stands: a reply
             # DID go into the chat, and re-opening the window would defeat
             # the anti-amplification purpose of the throttle.
-            if not sent_any:
-                self._restore_reply_window(chat_id, store, previous)
+            if not sent_any and claim is not None:
+                self._rollback_reply_claim(chat_id, store, claim, previous)
             raise
 
-    def _claim_reply_window(self, chat_id: Any, store: Store) -> tuple[bool, Any]:
+    def _claim_reply_window(self, chat_id: Any, store: Store) -> tuple[bool, dict[str, str] | None, Any]:
         """Claim the per-chat auto-reply throttle window.
 
-        Returns ``(claimed, previous_value)``. ``False`` when a reply would
-        fire within ``reply_min_interval_seconds`` of the previous one to this
-        chat — or when a concurrent reply claimed the window first: the write
-        is a compare-and-swap against the value we read, so two tasks
-        completing at once for the same chat can never both pass."""
+        Returns ``(claimed, claim, previous_value)`` — ``claim`` is the
+        watermark this call wrote (``None`` when throttling is off), kept so a
+        failed send can roll back exactly its own claim. ``claimed`` is
+        ``False`` when a reply would fire within
+        ``reply_min_interval_seconds`` of the previous one to this chat — or
+        when a concurrent reply claimed the window first: the write is a
+        compare-and-swap against the value we read, so two tasks completing
+        at once for the same chat can never both pass."""
         interval = self._config.reply_min_interval_seconds
         if interval <= 0:
-            return True, None
+            return True, None, None
         key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
         now = self._clock()
         last = store.read(key)
@@ -212,22 +215,22 @@ class TelegramInbox:
             except ValueError:
                 last_at = None
             if last_at is not None and (now - last_at).total_seconds() < interval:
-                return False, last
-        if not store.compare_and_swap(key, last, {"at": now.isoformat()}):
-            return False, last  # lost the race to a concurrent reply
-        return True, last
+                return False, None, last
+        claim = {"at": now.isoformat()}
+        if not store.compare_and_swap(key, last, claim):
+            return False, None, last  # lost the race to a concurrent reply
+        return True, claim, last
 
-    def _restore_reply_window(self, chat_id: Any, store: Store, previous: Any) -> None:
-        """Best-effort rollback of a claimed throttle window after a send that
-        delivered nothing. Between our claim and this rollback no other reply
-        can claim (they see our fresh watermark), so a plain write is safe."""
-        if self._config.reply_min_interval_seconds <= 0:
-            return
+    def _rollback_reply_claim(self, chat_id: Any, store: Store, claim: dict[str, str], previous: Any) -> None:
+        """Give the window back after a send that delivered nothing — but only
+        if our claim is still the current watermark. The CAS guards the case
+        where the failing send outlived the window (possible when
+        ``reply_min_interval_seconds`` is shorter than the send timeout) and a
+        newer reply legitimately claimed meanwhile: that claim must not be
+        erased. ``previous=None`` restores to ``{}``, which the window check
+        treats as no watermark."""
         key = store_keys.tg_reply_throttle_key(self._config.bot_id, str(chat_id))
-        if previous is None:
-            store.delete(key)
-        else:
-            store.write(key, previous)
+        store.compare_and_swap(key, claim, previous if previous is not None else {})
 
     def _to_inbound(self, event_id: str, msg: dict[str, Any], text: str) -> InboundMessage:
         frm = msg.get("from") or {}

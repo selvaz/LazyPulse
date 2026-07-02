@@ -7,6 +7,18 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- **`TelegramInbox` treats a media caption as the message text.** A photo
+  captioned "analyse this" previously vanished silently (the offset advanced
+  past it with no task and no feedback); it now becomes a task like a plain
+  text message. Updates with neither text nor caption are still skipped.
+- **`TelegramInbox` drain hardening.** A corrupt offset watermark in the
+  Store now refetches from scratch (the central `EVENT` dedupe absorbs the
+  replay) instead of failing every poll forever; updates without a usable
+  `update_id` are skipped instead of colliding on one shared event id.
+  `TelegramInboxConfig` rejects `max_results` outside the Bot API's 1–100
+  range at construction time.
+
 ### Fixed
 - **The Telegram reply throttle is now race-free and fail-safe.** The
   per-chat window claim is a compare-and-swap (two tasks completing at once

@@ -133,6 +133,47 @@ async def test_get_updates_uses_stored_offset() -> None:
     assert svc.offsets == [100]
 
 
+async def test_drain_emits_media_caption_as_text() -> None:
+    # A photo with a caption is a task ("analyse this" must not vanish).
+    upd = _update(9, text=None)
+    upd["message"]["caption"] = "analyse this"
+    svc = FakeService([upd])
+    msgs = await _inbox(svc).drain(store=Store(), session=None)
+    assert len(msgs) == 1
+    assert msgs[0].text == "analyse this"
+
+
+async def test_drain_recovers_from_corrupt_offset() -> None:
+    # A corrupt watermark must not wedge the adapter: refetch from 0 and let
+    # the central EVENT dedupe absorb the replay.
+    store = Store()
+    store.write(store_keys.TG_OFFSET.format(bot=BOT), {"offset": "garbage"})
+    svc = FakeService([_update(3)])
+    msgs = await _inbox(svc).drain(store=store, session=None)
+    assert len(msgs) == 1
+    assert svc.offsets == [0]
+
+
+async def test_drain_skips_updates_without_update_id() -> None:
+    # No usable update_id → can be neither confirmed nor deduped; skipped
+    # without crashing, and without colliding on a shared event id.
+    class RawService(FakeService):
+        def get_updates(self, *, offset: int, timeout: int = 0, limit: int = 100) -> list[dict[str, Any]]:
+            return [{"message": {"text": "orphan"}, "update_id": None}, {"message": {"text": "orphan2"}}]
+
+    svc = RawService([])
+    assert await _inbox(svc).drain(store=Store(), session=None) == []
+
+
+def test_config_rejects_out_of_range_max_results() -> None:
+    import pytest
+
+    with pytest.raises(ValueError, match="max_results"):
+        TelegramInboxConfig(bot_id=BOT, max_results=101)
+    with pytest.raises(ValueError, match="max_results"):
+        TelegramInboxConfig(bot_id=BOT, max_results=0)
+
+
 async def test_default_action_propagates() -> None:
     svc = FakeService([_update(1)])
     msgs = await _inbox(svc, default_action=ActionClass.WRITE_LOCAL).drain(store=Store(), session=None)

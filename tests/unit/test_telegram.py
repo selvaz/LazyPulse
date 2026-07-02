@@ -242,9 +242,10 @@ async def test_drain_offloads_blocking_client() -> None:
         loop_alive.set()
 
     drain = asyncio.ensure_future(_inbox(svc).drain(store=Store(), session=None))
-    asyncio.ensure_future(sentinel())
+    watcher = asyncio.ensure_future(sentinel())
     await asyncio.wait_for(loop_alive.wait(), timeout=0.15)
     assert len(await drain) == 1
+    await watcher
 
 
 async def test_reply_offloads_blocking_client() -> None:
@@ -264,9 +265,10 @@ async def test_reply_offloads_blocking_client() -> None:
         loop_alive.set()
 
     reply = asyncio.ensure_future(_inbox(svc).reply(_reply_record(), "hi", store=Store(), session=None))
-    asyncio.ensure_future(sentinel())
+    watcher = asyncio.ensure_future(sentinel())
     await asyncio.wait_for(loop_alive.wait(), timeout=0.15)
     await reply
+    await watcher
     assert len(svc.sent) == 1
 
 

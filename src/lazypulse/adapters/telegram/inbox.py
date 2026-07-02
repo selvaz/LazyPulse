@@ -70,9 +70,7 @@ class TelegramInboxConfig:
 
     def __post_init__(self) -> None:
         if not 1 <= self.max_results <= 100:
-            raise ValueError(
-                f"max_results must be in 1..100 (the Bot API getUpdates limit), got {self.max_results}"
-            )
+            raise ValueError(f"max_results must be in 1..100 (the Bot API getUpdates limit), got {self.max_results}")
 
 
 class TelegramInbox:

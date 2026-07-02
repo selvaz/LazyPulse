@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Removed
+- **The `lazypulse.adapters.telegram` deprecation shim is gone** (overdue: its
+  own message promised removal in 0.3, and 0.3.0 removed the equivalent Gmail
+  shim). The lazy PEP 562 re-exports of `TelegramClient`, `TelegramService`,
+  `TelegramTools`, and `TelegramSendBlocked` (moved to
+  `lazytools.connectors.telegram` in 0.2) now raise `AttributeError` instead of
+  emitting a `DeprecationWarning`. Import from `lazytools.connectors.telegram`
+  directly; the `lazypulse.TelegramTools` convenience re-export is unaffected.
+
 ### Added — local Outlook desktop intake (low-setup alternative to Gmail)
 - **`OutlookInbox` / `OutlookInboxConfig` / `OutlookPolicy`** (new `outlook`
   extra → `lazytoolkit[outlook]`). Polls the copy of Outlook **already running

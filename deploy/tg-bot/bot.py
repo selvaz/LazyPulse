@@ -23,6 +23,9 @@ si imposta dal pannello web senza toccare il codice:
     # Un task parcheggiato per approvazione manda un messaggio all'owner; l'owner
     # risponde "/approve <id>" o "/reject <id> [motivo]". Attivo di default (il
     # reviewer è sempre cablato); scatta quando un'azione risulta rischiosa.
+    REVIEW_KEYWORDS    (opz.)          parole che mandano un messaggio in review
+                                        (default: invia,manda,cancella,paga,...;
+                                        REVIEW_KEYWORDS="" per disattivare l'HITL)
 
     # --- crawler (LazyCrawler) ---
     ENABLE_CRAWLER     (opz.)          "1" (default) per dare i tool web all'agente; "0" per spegnerlo
@@ -47,6 +50,41 @@ from lazypulse.adapters.telegram import (
     TelegramPolicy,
     TelegramReviewer,
 )
+from lazypulse.models import ActionClass, InboundMessage
+
+#: Parole che fanno considerare "rischioso" un messaggio → l'azione viene
+#: rietichettata EXTERNAL_SEND, così un owner verificato deve confermarla
+#: (REQUIRE_OWNER_CONFIRMATION → awaiting_review → messaggio HITL). Override con
+#: la env REVIEW_KEYWORDS (lista separata da virgole); REVIEW_KEYWORDS="" spegne.
+_DEFAULT_REVIEW_KEYWORDS = [
+    "invia", "inviare", "manda", "mandare", "spedisci", "email", "mail",
+    "cancella", "elimina", "rimuovi", "paga", "pagamento", "bonifico",
+    "trasferisci", "send", "delete", "remove", "pay", "transfer", "wire",
+]
+
+
+def _build_action_classifier():
+    """Euristica opt-out: mappa i messaggi che chiedono azioni rischiose a
+    EXTERNAL_SEND (→ review). Restituisce ``None`` se disabilitata.
+
+    Nota: è un MVP a parole-chiave — rietichetta *l'intento*, non confina i
+    tool del worker. Per un confinamento reale, gattare il tool di invio."""
+    raw = os.environ.get("REVIEW_KEYWORDS")
+    keywords = (
+        [w.strip().lower() for w in raw.split(",") if w.strip()]
+        if raw is not None
+        else _DEFAULT_REVIEW_KEYWORDS
+    )
+    if not keywords:
+        return None
+
+    def classify(msg: InboundMessage) -> ActionClass:
+        text = (msg.text or "").lower()
+        if any(kw in text for kw in keywords):
+            return ActionClass.EXTERNAL_SEND
+        return ActionClass.READ_PUBLIC
+
+    return classify
 
 
 def _require(name: str) -> str:
@@ -137,6 +175,7 @@ def main() -> None:
         terminal_retention=retention_seconds,          # non far crescere lo Store all'infinito
         stale_after=stale_after,                       # recovery dei task crashati
         command_filter=reviewer.handle_command,        # intercetta /approve /reject dell'owner
+        action_classifier=_build_action_classifier(),  # messaggi rischiosi → review HITL
     )
 
     print(

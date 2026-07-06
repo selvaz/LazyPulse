@@ -78,6 +78,8 @@ class PulseAgent(Agent):
         retry_policy: RetryPolicy | None = None,
         adapter_backoff_base: float = 2.0,
         adapter_backoff_cap: float = 300.0,
+        action_classifier: Callable[[InboundMessage], ActionClass] | None = None,
+        command_filter: Callable[[InboundMessage], bool] | None = None,
         **agent_kwargs: Any,
     ) -> None:
         # Risk note: super().__init__ MUST run first. Agent.__init__ registers
@@ -107,6 +109,24 @@ class PulseAgent(Agent):
                 )
             self._adapters_by_name[name] = adapter
         self._policy = policy
+        # Optional intake hooks (both default off; zero behaviour change unused).
+        #
+        # ``action_classifier`` addresses the fact that inbound adapters stamp a
+        # *static* ``requested_action`` (Gmail/Telegram default to READ_PUBLIC),
+        # so the policy's fine-grained escalation for EXTERNAL_SEND/DESTRUCTIVE
+        # is otherwise unreachable through those channels. When set, it maps an
+        # inbound message to the action the policy should authorize it as — e.g.
+        # route messages that ask to send/delete to a review-triggering class.
+        # It only re-labels intent; it does not itself confine the worker's
+        # tools (guard those at the tool layer).
+        #
+        # ``command_filter`` lets a message be consumed as an *operator command*
+        # (e.g. an owner's ``/approve <id>`` over Telegram) instead of becoming
+        # a worker task: return ``True`` and the message is deduped and dropped
+        # from the task pipeline. Used by ``TelegramReviewer`` to close the
+        # human-in-the-loop over the same inbound channel.
+        self._action_classifier = action_classifier
+        self._command_filter = command_filter
         self._unsafe_allow_all = unsafe_allow_all
         # Safety gate: a PulseAgent ingesting from external adapters with no
         # policy would run *every* inbound message (the no-policy path grants
@@ -493,6 +513,19 @@ class PulseAgent(Agent):
             report.duplicates += 1
             return
 
+        # Operator command (e.g. an owner's ``/approve <id>``): consume it
+        # instead of running it as a worker task. We still mark the event so
+        # the at-least-once adapter stops re-emitting it, but write no record.
+        if self._command_filter is not None and self._command_filter(msg):
+            self.store.write(event_key, {"command": True})
+            return
+
+        # Re-label intent if an action classifier is configured (see __init__).
+        # A shallow copy keeps the override local; downstream authorize + record
+        # both read ``requested_action``.
+        if self._action_classifier is not None:
+            msg = msg.model_copy(update={"requested_action": self._action_classifier(msg)})
+
         identity, decision = self._authorize(msg)
 
         # Per-sender rate limiting: only applied to messages the policy would ALLOW.
@@ -720,6 +753,17 @@ class PulseAgent(Agent):
         for key, raw in self._scan_records():
             if raw.get("status") != "running":
                 continue
+            # A task this process is actively running (dispatched by the tick
+            # loop, tracked in ``_inflight``) is by definition not crashed —
+            # even when it outlives ``stale_after`` (a slow tool, a big Plan
+            # pipeline, or a worker parked in human review). Resetting it here
+            # would let the next tick re-dispatch it *concurrently*, firing the
+            # same side effect twice (a duplicate Telegram reply, a duplicate
+            # email). Only records with no local in-flight owner are recovery
+            # candidates; the cross-process crash case still relies on the
+            # wall-clock heuristic below.
+            if key in self._inflight:
+                continue
             started_at = _parse_dt(raw.get("started_at"))
             if started_at is None or now - started_at <= threshold:
                 continue
@@ -745,11 +789,20 @@ class PulseAgent(Agent):
         if self._last_prune_at is not None and (now - self._last_prune_at).total_seconds() < _PRUNE_INTERVAL:
             return
         self._last_prune_at = now
-        from lazypulse.tasks import purge_terminal_tasks
+        from lazypulse.tasks import purge_stale_rate_buckets, purge_terminal_tasks
 
         report.pruned += purge_terminal_tasks(
             self.store, older_than=timedelta(seconds=self._terminal_retention), now=now
         )
+        # Rate-limit counters are keyed per (sender, closed window) and are
+        # dead once their window has elapsed. terminal_retention does not touch
+        # them (it only ages task records), so without this an abusive or busy
+        # sender accretes one ``pulse:rate:*`` key per window forever. Prune the
+        # closed ones on the same throttled pass.
+        if self._policy is not None and self._policy.rate_limit is not None:
+            report.pruned += purge_stale_rate_buckets(
+                self.store, window_seconds=self._policy.rate_limit.window_seconds, now=now
+            )
 
     def _reschedule_due_retries(self, now: datetime, report: TickReport) -> None:
         """Re-schedule failed records whose ``next_retry_at`` has passed."""
@@ -786,12 +839,15 @@ class PulseAgent(Agent):
         """
         if self.store is None:
             return
-        if hasattr(self.store, "items"):
-            cron_items: list[tuple[str, Any]] = self.store.items(prefix=store_keys.CRON_PREFIX)
-        else:
-            cron_items = [
-                (key, self.store.read(key)) for key in list(self.store.keys()) if key.startswith(store_keys.CRON_PREFIX)
-            ]
+        # Use the shared scanner: it probes ``items(prefix=)`` and degrades to a
+        # ``keys()`` walk when the store's ``items()`` predates the ``prefix=``
+        # keyword. The old hand-rolled ``hasattr(store, "items")`` check called
+        # ``items(prefix=...)`` unconditionally, which raised ``TypeError`` every
+        # tick on such a store — swallowed as ``pulse.tick_error`` and aborting
+        # the rest of the tick (intake + due execution skipped).
+        from lazypulse.tasks import _iter_records
+
+        cron_items = _iter_records(self.store, store_keys.CRON_PREFIX)
         for key, raw in cron_items:
             if not isinstance(raw, dict):
                 continue

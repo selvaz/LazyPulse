@@ -11,9 +11,11 @@ from __future__ import annotations
 
 from lazypulse.adapters.telegram.inbox import TelegramInbox, TelegramInboxConfig
 from lazypulse.adapters.telegram.policy import TelegramPolicy
+from lazypulse.adapters.telegram.review import TelegramReviewer
 
 __all__ = [
     "TelegramInbox",
     "TelegramInboxConfig",
     "TelegramPolicy",
+    "TelegramReviewer",
 ]

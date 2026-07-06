@@ -21,6 +21,11 @@ EVENT = "pulse:event:{event_id}"
 REVIEW_REQ = "pulse:review:req:{review_id}"
 REVIEW_RESP = "pulse:review:resp:{review_id}"
 
+#: Marks that a parked ``awaiting_review`` task has already been announced to a
+#: human reviewer (e.g. a Telegram message to the owner), so a per-tick notifier
+#: does not re-send the same approval request every tick.
+REVIEW_NOTIFIED = "pulse:review:notified:{task_id}"
+
 #: Gmail incremental-sync state, one entry per account, owned by
 #: ``GmailPushInbox``: ``{"history_id": str, "pending_ids": [...],
 #: "pending_history_id": str, "watch_expiration_ms": int}``. The cursor

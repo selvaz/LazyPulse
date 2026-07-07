@@ -133,6 +133,18 @@ def test_handle_command_ignores_non_command() -> None:
     assert reviewer.handle_command(_cmd_msg("what's the weather?", OWNER)) is False
 
 
+def test_handle_command_ignores_bare_word_without_slash() -> None:
+    # "approve the proposal" is an ordinary message, NOT a HITL command — it must
+    # reach the worker, not be silently consumed. Only /approve · /reject count.
+    store = Store()
+    task_id = _park(store)
+    reviewer = TelegramReviewer(FakeClient(), store, owner_id=OWNER)
+    assert reviewer.handle_command(_cmd_msg("approve the proposal", OWNER)) is False
+    assert reviewer.handle_command(_cmd_msg("reject this idea outright", OWNER)) is False
+    # The parked task is untouched — the messages were not treated as commands.
+    assert PulseRecord.model_validate(store.read(store_keys.task_key(task_id))).status == "awaiting_review"
+
+
 def test_handle_command_strips_botname_suffix() -> None:
     store = Store()
     task_id = _park(store)

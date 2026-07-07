@@ -780,28 +780,36 @@ class PulseAgent(Agent):
                 report.recovered += 1
 
     def _prune_terminal(self, now: datetime, report: TickReport) -> None:
-        """Delete terminal records older than ``terminal_retention`` so an
-        always-on agent's Store does not grow without bound. No-op unless
-        ``terminal_retention=`` was set. Throttled to once per ``_PRUNE_INTERVAL``
-        seconds because it scans the whole task space."""
-        if self._terminal_retention is None or self.store is None:
+        """Reclaim Store growth on a throttled pass: terminal task records older
+        than ``terminal_retention`` (when set) and closed per-sender rate-limit
+        counters (when a rate limit is configured). Throttled to once per
+        ``_PRUNE_INTERVAL`` seconds because each scans the Store.
+
+        Rate-bucket pruning is **independent of** ``terminal_retention``: a
+        rate-limited agent that never set retention would otherwise still accrue
+        one ``pulse:rate:*`` key per sender per window forever, since those
+        counters are not terminal task ledger entries."""
+        if self.store is None:
+            return
+        prune_terminal = self._terminal_retention is not None
+        rate_limit = self._policy.rate_limit if self._policy is not None else None
+        if not prune_terminal and rate_limit is None:
             return
         if self._last_prune_at is not None and (now - self._last_prune_at).total_seconds() < _PRUNE_INTERVAL:
             return
         self._last_prune_at = now
         from lazypulse.tasks import purge_stale_rate_buckets, purge_terminal_tasks
 
-        report.pruned += purge_terminal_tasks(
-            self.store, older_than=timedelta(seconds=self._terminal_retention), now=now
-        )
-        # Rate-limit counters are keyed per (sender, closed window) and are
-        # dead once their window has elapsed. terminal_retention does not touch
-        # them (it only ages task records), so without this an abusive or busy
-        # sender accretes one ``pulse:rate:*`` key per window forever. Prune the
-        # closed ones on the same throttled pass.
-        if self._policy is not None and self._policy.rate_limit is not None:
+        if self._terminal_retention is not None:
+            report.pruned += purge_terminal_tasks(
+                self.store, older_than=timedelta(seconds=self._terminal_retention), now=now
+            )
+        # Rate-limit counters are keyed per (sender, closed window) and are dead
+        # once their window has elapsed. Prune them whenever a rate limit is
+        # configured, regardless of terminal_retention.
+        if rate_limit is not None:
             report.pruned += purge_stale_rate_buckets(
-                self.store, window_seconds=self._policy.rate_limit.window_seconds, now=now
+                self.store, window_seconds=rate_limit.window_seconds, now=now
             )
 
     def _reschedule_due_retries(self, now: datetime, report: TickReport) -> None:

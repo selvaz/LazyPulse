@@ -1,9 +1,16 @@
 # LazyPulse
 
 **Give an LLM agent a heartbeat.** LazyPulse turns a one-shot agent into an
-always-on one: it watches an inbox / webhook / queue, decides *who is allowed to
-ask it for what*, runs the work in the background, and pauses for your approval
-before anything risky (like sending an email) actually happens.
+always-on one: it watches a **Telegram** chat / inbox / webhook, decides *who is
+allowed to ask it for what*, runs the work in the background, and pauses for your
+approval — right in the chat — before anything risky actually happens.
+
+!!! tip "Start with Telegram"
+    It is the simplest and safest channel: the sender id is authenticated by
+    Telegram's servers and **cannot be spoofed**, so the policy keys on
+    `owner_ids=[...]` directly — no DKIM/DMARC to parse, no mailbox to hand over,
+    and the bot is **two-way out of the box**. See [Telegram](telegram.md). Gmail,
+    Outlook, and webhooks are there when you need them.
 
 !!! info "Part of the LazyBridge ecosystem"
     A `PulseAgent` **is** a `lazybridge.Agent` with three additions — a tick
@@ -28,29 +35,41 @@ before anything risky (like sending an email) actually happens.
 ```
    inbound message            PulsePolicy                 your Agent
   ┌──────────────┐   drain   ┌────────────┐   allow?   ┌────────────┐
-  │ Gmail        │ ────────> │ who sent    │ ────────> │ engine +   │
-  │ Webhook      │           │ this? what  │  review?  │ tools +    │
-  │ your adapter │           │ may they    │  reject?  │ verify     │
-  └──────────────┘           │ ask for?    │           └────────────┘
-        every tick_seconds    └────────────┘            lifecycle in Store
+  │ Telegram     │ ────────> │ who sent    │ ────────> │ engine +   │
+  │ Gmail        │           │ this? what  │  review?  │ tools +    │
+  │ Webhook      │           │ may they    │  reject?  │ verify     │
+  │ your adapter │           │ ask for?    │           └────────────┘
+  └──────────────┘           └────────────┘            lifecycle in Store
+        every tick_seconds     approve in Telegram ↩
 ```
 
 ## Install
 
 ```bash
 pip install lazypulse                    # core tick loop + policy
-pip install 'lazypulse[gmail,webhook]'   # Gmail intake — push notifications, the default (pulls lazytoolkit[gmail] + HTTP pieces)
-pip install 'lazypulse[telegram]'        # Telegram inbox (pulls lazytoolkit[telegram])
+pip install 'lazypulse[telegram]'        # Telegram inbox & send  ← recommended start
+pip install 'lazypulse[gmail,webhook]'   # Gmail intake — push notifications, the default
 pip install 'lazypulse[webhook]'         # HTTP intake adapter
 ```
 
+## Start with Telegram
+
+A personal, always-on Telegram bot that only *you* can drive and that asks for
+approval **in the chat** before doing anything risky is the recommended way to
+run LazyPulse. The sender id is server-verified and unspoofable, so the trust
+policy is a one-liner (`TelegramPolicy(owner_ids=[...])`) and the bot is two-way
+out of the box. `TelegramReviewer` routes approvals through the same chat. See
+[Telegram](telegram.md) and the ready-to-deploy
+[`deploy/tg-bot/`](https://github.com/selvaz/LazyPulse/tree/main/deploy/tg-bot).
+
 ## Watching Gmail: push is the default
 
-Gmail can notify the agent the moment mail arrives (`users.watch` → Cloud
-Pub/Sub → the adapter's HTTP endpoint): **zero Gmail API calls while the
-mailbox is quiet, one cheap `history.list` per email received** — the
-configuration to run when you care about API quota. Polling remains the
-zero-setup quick start. See [Gmail (push & polling)](gmail.md).
+For email, Gmail can notify the agent the moment mail arrives (`users.watch` →
+Cloud Pub/Sub → the adapter's HTTP endpoint): **zero Gmail API calls while the
+mailbox is quiet, one cheap `history.list` per email received**. Polling remains
+the zero-setup quick start. Email identity rests on a conservative MVP parser of
+Gmail's `Authentication-Results` header, so it takes more care than Telegram —
+see [Gmail (push & polling)](gmail.md).
 
 ## How it relates to the other packages
 
@@ -67,6 +86,8 @@ trust lives in `lazypulse`.
 
 ## Where to go next
 
+- [Telegram](telegram.md) — the recommended channel: inbox, owner-only policy,
+  and human-in-the-loop approval (`TelegramReviewer`) over the same bot.
 - [Architecture](architecture.md) — the one rule (`PulseAgent` is an `Agent`)
   and the LazyBridge → LazyPulse mapping.
 - [Plan as engine](plan_engine.md) — deterministic triage-then-specialist

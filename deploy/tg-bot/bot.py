@@ -15,7 +15,17 @@ si imposta dal pannello web senza toccare il codice:
     STORE_DB           (opz.)          default: /data/pulse.db  (montare un Volume!)
     TICK_SECONDS       (opz.)          default: 3
     REPLY_MIN_INTERVAL (opz.)          default: 2   (anti-loop per chat)
+    RETENTION_SECONDS  (opz.)          default: 604800 (7g) — pota record terminali + rate-bucket
+    STALE_AFTER        (opz.)          default: 600 — recovery dei task "running" crashati
     SYSTEM_PROMPT      (opz.)          istruzioni di sistema dell'assistente
+
+    # --- human-in-the-loop (HITL) ---
+    # Un task parcheggiato per approvazione manda un messaggio all'owner; l'owner
+    # risponde "/approve <id>" o "/reject <id> [motivo]". Attivo di default (il
+    # reviewer è sempre cablato); scatta quando un'azione risulta rischiosa.
+    REVIEW_KEYWORDS    (opz.)          parole che mandano un messaggio in review
+                                        (default: invia,manda,cancella,paga,...;
+                                        REVIEW_KEYWORDS="" per disattivare l'HITL)
 
     # --- crawler (LazyCrawler) ---
     ENABLE_CRAWLER     (opz.)          "1" (default) per dare i tool web all'agente; "0" per spegnerlo
@@ -27,13 +37,54 @@ si imposta dal pannello web senza toccare il codice:
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 from lazybridge import LLMEngine, Store
 from lazytools.connectors.telegram import TelegramClient
 
 from lazypulse import PulseAgent
-from lazypulse.adapters.telegram import TelegramInbox, TelegramInboxConfig, TelegramPolicy
+from lazypulse.adapters.telegram import (
+    TelegramInbox,
+    TelegramInboxConfig,
+    TelegramPolicy,
+    TelegramReviewer,
+)
+from lazypulse.models import ActionClass, InboundMessage
+
+#: Parole che fanno considerare "rischioso" un messaggio → l'azione viene
+#: rietichettata EXTERNAL_SEND, così un owner verificato deve confermarla
+#: (REQUIRE_OWNER_CONFIRMATION → awaiting_review → messaggio HITL). Override con
+#: la env REVIEW_KEYWORDS (lista separata da virgole); REVIEW_KEYWORDS="" spegne.
+_DEFAULT_REVIEW_KEYWORDS = [
+    "invia", "inviare", "manda", "mandare", "spedisci", "email", "mail",
+    "cancella", "elimina", "rimuovi", "paga", "pagamento", "bonifico",
+    "trasferisci", "send", "delete", "remove", "pay", "transfer", "wire",
+]
+
+
+def _build_action_classifier():
+    """Euristica opt-out: mappa i messaggi che chiedono azioni rischiose a
+    EXTERNAL_SEND (→ review). Restituisce ``None`` se disabilitata.
+
+    Nota: è un MVP a parole-chiave — rietichetta *l'intento*, non confina i
+    tool del worker. Per un confinamento reale, gattare il tool di invio."""
+    raw = os.environ.get("REVIEW_KEYWORDS")
+    keywords = (
+        [w.strip().lower() for w in raw.split(",") if w.strip()]
+        if raw is not None
+        else _DEFAULT_REVIEW_KEYWORDS
+    )
+    if not keywords:
+        return None
+
+    def classify(msg: InboundMessage) -> ActionClass:
+        text = (msg.text or "").lower()
+        if any(kw in text for kw in keywords):
+            return ActionClass.EXTERNAL_SEND
+        return ActionClass.READ_PUBLIC
+
+    return classify
 
 
 def _require(name: str) -> str:
@@ -76,6 +127,14 @@ def main() -> None:
     db_path = os.environ.get("STORE_DB", "/data/pulse.db")
     tick_seconds = float(os.environ.get("TICK_SECONDS", "3"))
     reply_min_interval = float(os.environ.get("REPLY_MIN_INTERVAL", "2"))
+    # Store persistente sempre acceso: senza retention cresce all'infinito
+    # (record terminali + marker) e gli scan per-tick rallentano. 7 giorni di
+    # default; i contatori di rate-limit chiusi vengono potati insieme.
+    retention_seconds = float(os.environ.get("RETENTION_SECONDS", str(7 * 24 * 3600)))
+    # Un task "running" più vecchio di così è dato per crashato e recuperato.
+    # I task in attesa di approvazione HITL sono ``awaiting_review`` (non
+    # ``running``), quindi non sono toccati da questo valore.
+    stale_after = float(os.environ.get("STALE_AFTER", "600"))
     system = os.environ.get(
         "SYSTEM_PROMPT",
         "Sei un assistente personale conciso. Rispondi direttamente all'utente. "
@@ -83,12 +142,23 @@ def main() -> None:
     )
 
     client = TelegramClient.from_token(token)
+    store = Store(db=db_path)                            # persistente: serve un Volume montato
     tools = _build_crawler_tools()   # aggiungi qui altri tool (Gmail, MCP, funzioni tue): vanno tutti in tools=[...]
+
+    # Human-in-the-loop via Telegram: quando un task viene parcheggiato per
+    # approvazione (``awaiting_review``), il reviewer manda un messaggio
+    # all'owner ("/approve <id>" o "/reject <id>"). Le risposte dell'owner sono
+    # intercettate come comandi (``command_filter``) invece di diventare task.
+    # NB: perché un task venga parcheggiato serve che un'azione risulti
+    # rischiosa — oggi, owner-only + READ_PUBLIC, tutto è auto-consentito.
+    # Attiva l'HITL dando all'agente un tool di invio gattato, oppure impostando
+    # un ``action_classifier`` che marchi i messaggi rischiosi (vedi sotto).
+    reviewer = TelegramReviewer(client, store, owner_id=owner_id)
 
     pulse = PulseAgent(
         name="tg-deepseek",
         engine=LLMEngine(model, system=system),
-        store=Store(db=db_path),                       # persistente: serve un Volume montato
+        store=store,                                   # persistente: serve un Volume montato
         policy=TelegramPolicy(owner_ids=[owner_id]),   # solo l'owner verificato attiva il worker
         adapters=[
             TelegramInbox(
@@ -102,14 +172,35 @@ def main() -> None:
         ],
         tools=tools,
         tick_seconds=tick_seconds,
+        terminal_retention=retention_seconds,          # non far crescere lo Store all'infinito
+        stale_after=stale_after,                       # recovery dei task crashati
+        command_filter=reviewer.handle_command,        # intercetta /approve /reject dell'owner
+        action_classifier=_build_action_classifier(),  # messaggi rischiosi → review HITL
     )
 
     print(
         f"[tg-deepseek] avvio | model={model} db={db_path} "
-        f"tick={tick_seconds}s owner={owner_id} tools={len(tools)}",
+        f"tick={tick_seconds}s owner={owner_id} tools={len(tools)} "
+        f"retention={retention_seconds:.0f}s hitl=on",
         flush=True,
     )
-    pulse.serve()   # loop infinito: questo è il "sempre acceso"
+
+    # Loop "sempre acceso" + notifier HITL: il tick loop gira in un thread di
+    # sfondo; qui annunciamo all'owner i task in attesa di approvazione. Un loop
+    # asincrono separato dal tick loop — condividono solo lo Store (thread-safe).
+    async def _notifier() -> None:
+        while pulse.is_running():
+            try:
+                await reviewer.notify_pending()
+            except Exception as exc:  # best-effort: non far cadere il bot
+                print(f"[tg-deepseek] notifier error: {type(exc).__name__}: {exc}", flush=True)
+            await asyncio.sleep(tick_seconds)
+
+    with pulse.running():
+        try:
+            asyncio.run(_notifier())
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":

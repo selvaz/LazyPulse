@@ -8,10 +8,49 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`TelegramReviewer`** — human-in-the-loop review over the Telegram bot the
+  owner already talks to. `notify_pending()` announces each `awaiting_review`
+  task to the owner ("`/approve <id>` / `/reject <id>`", once per task via a
+  `REVIEW_NOTIFIED` marker); `handle_command()` applies the owner's reply and
+  is wired as `PulseAgent(command_filter=...)` so those replies are consumed as
+  operator commands, not run as worker tasks. Only the owner's Telegram
+  server-verified `from.id` may approve. Uses the pre-run review queue (Flow A:
+  the task is `awaiting_review`, not `running`), so it is untouched by the
+  `stale_after` recovery clock. Tested with a fake client.
+- **`PulseAgent(action_classifier=...)`** — optional hook mapping an inbound
+  message to the `ActionClass` the policy should authorize it as. Inbound
+  adapters stamp a *static* `requested_action` (Gmail/Telegram default to
+  `READ_PUBLIC`), which left the policy's `EXTERNAL_SEND`/`DESTRUCTIVE`
+  escalation unreachable through those channels; a classifier lets a deployment
+  route risky-intent messages to review. Re-labels intent only — it does not
+  confine the worker's tools (still guard those at the tool layer).
+- **`PulseAgent(command_filter=...)`** — optional hook to consume an inbound
+  message as an operator command (deduped, no task created) instead of running
+  it. Used by `TelegramReviewer`.
+- **`tasks.purge_stale_rate_buckets`** — reclaims `pulse:rate:*` counters whose
+  window has closed; called automatically from the prune pass when a
+  `RateLimit` is configured (see Fixed).
 - **`TrustLevel.OWNER_VERIFIED`** — channel-agnostic alias of
   `OWNER_VERIFIED_EMAIL` (same enum member, same serialisation). The
   canonical name carries "EMAIL" for historical reasons; non-email policies
   (`TelegramPolicy`) now read naturally.
+
+### Fixed
+- **Crash recovery no longer re-runs a task this process is actively running.**
+  `_recover_stale` skipped the `_inflight` check, so a worker legitimately
+  slower than `stale_after` (a slow tool, a big Plan pipeline) was reset to
+  `scheduled` and re-dispatched *concurrently* — firing its side effect twice
+  (a duplicate Telegram reply, a duplicate email). In-flight keys are now
+  skipped; the cross-process crash case still uses the wall-clock heuristic.
+- **`_process_cron` no longer aborts the whole tick on an older Store.** It
+  hand-rolled `hasattr(store, "items")` then called `items(prefix=...)`
+  unconditionally, raising `TypeError` every tick on a store whose `items()`
+  predates the `prefix=` keyword (swallowed as `pulse.tick_error`, skipping
+  intake and due execution). It now shares the `tasks._iter_records` scanner,
+  which degrades to a `keys()` walk.
+- **Rate-limit counters are pruned.** `pulse:rate:*` keys accrued one per sender
+  per window forever (`terminal_retention` only ages task records). The prune
+  pass now reclaims counters whose window has closed.
 
 ### Deprecated (planned for 0.4)
 - **The email-specific fields on the base `PulsePolicy`** (`owner_emails`,

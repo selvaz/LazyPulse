@@ -139,3 +139,28 @@ def purge_terminal_tasks(
             store.delete(key)
             deleted += 1
     return deleted
+
+
+def purge_stale_rate_buckets(store: Store, *, window_seconds: int, now: datetime | None = None) -> int:
+    """Delete per-sender rate-limit counters whose window has already closed.
+
+    Keys are ``pulse:rate:{sender}:{window_bucket}`` where ``window_bucket =
+    floor(ts / window_seconds)``. A bucket is dead once the window after it has
+    started — no future message can fall into a past window — so any bucket with
+    ``(bucket + 1) * window_seconds <= now`` is safe to drop. ``terminal_retention``
+    never touches these, so an always-on agent would otherwise accrue one key
+    per sender per window without bound. Returns the count deleted.
+    """
+    now = now or datetime.now(UTC)
+    current_bucket = int(now.timestamp()) // window_seconds
+    deleted = 0
+    for key, _raw in _iter_records(store, store_keys.RATE_PREFIX):
+        # Trailing segment is the window bucket; a malformed key is left alone.
+        try:
+            bucket = int(key.rsplit(":", 1)[1])
+        except (IndexError, ValueError):
+            continue
+        if bucket < current_bucket:
+            store.delete(key)
+            deleted += 1
+    return deleted

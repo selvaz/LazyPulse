@@ -48,6 +48,7 @@ plugins:
         Overview:
           - index.md
         Guides:
+          - telegram.md
           - gmail.md
           - architecture.md
           - plan_engine.md
@@ -84,6 +85,7 @@ extra_css:
 
 nav:
   - Home: index.md
+  - Telegram (recommended): telegram.md
   - Gmail (push & polling): gmail.md
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md

@@ -131,6 +131,29 @@ async def test_prune_reclaims_rate_buckets_during_tick() -> None:
     assert store.read(f"pulse:rate:bob:{cur - 10}") is None
 
 
+async def test_prune_reclaims_rate_buckets_without_terminal_retention() -> None:
+    # Rate-limited agent that never set terminal_retention must still reclaim
+    # closed rate buckets — otherwise pulse:rate:* grows forever (the prune was
+    # previously gated behind terminal_retention).
+    from lazypulse.ratelimit import RateLimit
+
+    clock = FakeClock()
+    store = Store()
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["x"]),
+        store=store,
+        clock=clock,
+        policy=PulsePolicy(rate_limit=RateLimit(window_seconds=60)),  # no terminal_retention
+    )
+    cur = int(clock.now.timestamp()) // 60
+    store.write(f"pulse:rate:bob:{cur - 10}", {"count": 5})  # stale
+    clock.advance(120)
+    report = await pulse.tick_once()
+    assert report.pruned >= 1
+    assert store.read(f"pulse:rate:bob:{cur - 10}") is None
+
+
 # --- Intake hooks ------------------------------------------------------ #
 
 

@@ -161,8 +161,12 @@ def _parse_command(text: str | None) -> tuple[str, str, str | None] | None:
     parts = text.strip().split(maxsplit=2)
     if not parts:
         return None
-    word = parts[0].lower().lstrip("/")
-    word = word.split("@", 1)[0]  # strip /approve@mybot → approve
+    # Require the leading slash: only ``/approve`` / ``/reject`` are commands.
+    # A bare word ("approve the proposal") is an ordinary message and must reach
+    # the worker, not be silently consumed as a HITL command.
+    if not parts[0].startswith("/"):
+        return None
+    word = parts[0][1:].lower().split("@", 1)[0]  # strip /approve@mybot → approve
     if word not in ("approve", "reject"):
         return None
     if len(parts) < 2 or not parts[1]:

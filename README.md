@@ -1,9 +1,16 @@
 # LazyPulse
 
 **Give an LLM agent a heartbeat.** LazyPulse turns a one-shot agent into an
-always-on one: it watches an inbox / webhook / queue, decides *who is allowed
-to ask it for what*, runs the work in the background, and pauses for your
-approval before anything risky — like sending an email — actually happens.
+always-on one: it watches a **Telegram** chat / inbox / webhook, decides *who is
+allowed to ask it for what*, runs the work in the background, and pauses for
+your approval — right in the chat — before anything risky actually happens.
+
+**Start with Telegram.** It is the simplest and safest channel to run: the
+sender id is authenticated by Telegram's servers and *cannot be spoofed*, so the
+trust policy keys on `owner_ids=[...]` directly — no DKIM/DMARC to parse, no
+mailbox to hand over, and the bot is **two-way out of the box** (message it, get
+the agent's answer back). Gmail, Outlook, and generic webhooks are there when
+you need them.
 
 It's built on [lazybridge](https://github.com/selvaz/LazyBridge): a
 `PulseAgent` is a normal `lazybridge.Agent` with three additions — a **tick
@@ -12,11 +19,12 @@ loop**, a **trust policy**, and **inbound adapters**.
 ```
    inbound message            PulsePolicy                 your Agent
   ┌──────────────┐   drain   ┌────────────┐   allow?   ┌────────────┐
-  │ Gmail        │ ────────> │ who sent    │ ────────> │ engine +   │
-  │ Webhook      │           │ this? what  │  review?  │ tools +    │
-  │ your adapter │           │ may they    │  reject?  │ verify     │
-  └──────────────┘           │ ask for?    │           └────────────┘
-        every tick_seconds    └────────────┘            lifecycle in Store
+  │ Telegram     │ ────────> │ who sent    │ ────────> │ engine +   │
+  │ Gmail        │           │ this? what  │  review?  │ tools +    │
+  │ Webhook      │           │ may they    │  reject?  │ verify     │
+  │ your adapter │           │ ask for?    │           └────────────┘
+  └──────────────┘           └────────────┘            lifecycle in Store
+        every tick_seconds     approve in Telegram ↩
 ```
 
 ---
@@ -34,10 +42,10 @@ loop**, a **trust policy**, and **inbound adapters**.
 ## Install
 
 ```bash
-pip install lazypulse                # core
-pip install 'lazypulse[webhook]'     # + HTTP intake
+pip install lazypulse                # core tick loop + policy
+pip install 'lazypulse[telegram]'    # + Telegram inbox & send  ← the recommended start
 pip install 'lazypulse[gmail,webhook]'  # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
-pip install 'lazypulse[telegram]'    # + Telegram polling & send
+pip install 'lazypulse[webhook]'     # + HTTP intake
 pip install 'lazypulse[outlook]'     # + local Outlook desktop inbox (Windows, via LazyTools)
 pip install 'lazypulse[cron]'        # + cron-expression scheduling
 pip install 'lazypulse[dev]'         # test + lint toolchain
@@ -99,82 +107,121 @@ pass a `policy=` instead, and a `PulseAgent` with adapters but neither will
 
 ---
 
-## A real agent: watch Gmail, draft replies, ask before sending
+## A real agent: a Telegram assistant that asks before acting
 
-**The default way to watch Gmail is push notifications, not polling.**
-Gmail tells the agent the moment mail arrives (via `users.watch` + a Cloud
-Pub/Sub push subscription); between emails the agent makes **zero** Gmail
-API calls, and each arrival costs one cheap `history.list` call. That keeps
-you far away from quota trouble. `GmailPushInbox` handles the watch
-arming/renewal, the push endpoint (shared-token auth), the persisted
-history cursor, and at-least-once delivery — see
-[`examples/04_gmail_push.py`](examples/04_gmail_push.py) for the full
-walkthrough including the one-time (~10 min) Pub/Sub setup:
-
-```python
-from lazypulse.adapters.gmail import GmailPushConfig, GmailPushInbox
-
-inbox = GmailPushInbox(client, GmailPushConfig(
-    account=OWNER,
-    topic_name="projects/<project>/topics/gmail-pulse",  # watch armed + renewed for you
-    shared_token=PUSH_TOKEN,                             # ?token= auth on the endpoint
-))
-# threading.Thread(target=inbox.serve, daemon=True).start()  # the push endpoint
-# ...then pass adapters=[inbox] below instead of the polling GmailInbox.
-```
-
-The polling `GmailInbox` below remains the **zero-setup quick start** (no
-GCP project needed) and the fallback when you can't expose an HTTPS
-endpoint — it's fine at gentle tick rates, and adapter errors now back off
-exponentially either way:
+This is the recommended way to run LazyPulse — a personal, always-on Telegram
+bot that only *you* can drive, and that pauses for your approval, **in the
+chat**, before doing anything you've flagged as risky. There is a ready-to-ship
+version (DeepSeek + optional web tools, one-command Railway/Render deploy) under
+[`deploy/tg-bot/`](deploy/tg-bot/); the core wiring is:
 
 ```python
 from lazybridge import LLMEngine, Session, Store
 from lazypulse import PulseAgent
-from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
-from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install 'lazypulse[gmail]'
-
-OWNER = "you@example.com"
-SCOPES = ["https://www.googleapis.com/auth/gmail.metadata"]
-
-# One-time OAuth: opens a browser, caches token.json (git-ignored).
-client = GmailClient.from_credentials(
-    credentials_path="credentials.json", token_path="token.json", scopes=SCOPES,
+from lazypulse.adapters.telegram import (
+    TelegramInbox, TelegramInboxConfig, TelegramPolicy, TelegramReviewer,
 )
+from lazypulse.models import ActionClass
+from lazytools.connectors.telegram import TelegramClient  # pip install 'lazypulse[telegram]'
+
+OWNER_ID = 123456789                       # your Telegram user id (message.from.id)
+client = TelegramClient.from_token("123:AA...")
+store = Store(db="pulse.db")               # persistent: survives restarts
+
+# Human-in-the-loop over the same bot: a parked task pings you in Telegram; you
+# reply /approve <id> or /reject <id>. handle_command intercepts those replies.
+reviewer = TelegramReviewer(client, store, owner_id=OWNER_ID)
+
+# Decide what needs approval. Here: any message that asks to send/delete/pay is
+# re-labelled EXTERNAL_SEND, so it parks for confirmation instead of auto-running.
+def needs_review(msg):
+    risky = ("send", "delete", "pay", "invia", "cancella", "paga")
+    return ActionClass.EXTERNAL_SEND if any(k in msg.text.lower() for k in risky) else ActionClass.READ_PUBLIC
 
 pulse = PulseAgent(
-    name="inbox-assistant",
-    engine=LLMEngine("claude-opus-4-8", system="You triage and draft email replies."),
-    tools=[GmailTools(client, allowed_recipients=[OWNER])],   # draft freely; send is gated
-    store=Store(db="pulse.db"),         # persistent: survives restarts
-    session=Session(),                  # observability
-    policy=GmailPolicy(owner_emails=[OWNER]),   # only verified owner mail acts
-    adapters=[GmailInbox(client, GmailInboxConfig(account=OWNER, query="is:unread"))],
-    tick_seconds=15.0,                  # poll every 15s
+    name="assistant",
+    engine=LLMEngine("claude-opus-4-8", system="You are a concise personal assistant."),
+    store=store,
+    session=Session(),                              # observability
+    policy=TelegramPolicy(owner_ids=[OWNER_ID]),    # only the verified owner acts
+    adapters=[TelegramInbox(client, TelegramInboxConfig(bot_id="assistant"))],
+    action_classifier=needs_review,                 # risky intent → review
+    command_filter=reviewer.handle_command,         # owner /approve · /reject
+    terminal_retention=7 * 24 * 3600,               # keep the Store bounded (always-on)
+    tick_seconds=3.0,
 )
 
-pulse.serve()   # polls every 15s in the background, blocks until Ctrl-C
+with pulse.running():                    # background loop
+    import asyncio
+    async def notify_loop():
+        while pulse.is_running():
+            await reviewer.notify_pending()   # ping the owner about parked tasks
+            await asyncio.sleep(3.0)
+    asyncio.run(notify_loop())
 ```
 
 What happens each tick:
 
-1. `GmailInbox` polls for unread mail and emits one message per email (each
-   carrying its DKIM/SPF/DMARC result).
-2. `GmailPolicy` classifies the sender. Mail from `OWNER` that passes DKIM +
-   DMARC is `OWNER_VERIFIED_EMAIL`; a spoof or stranger is not.
-3. The matrix decides: owner mail (default `READ_PUBLIC` intent) → **runs**;
-   everyone else → **rejected** before the model ever sees the text. If you
-   want the *policy* itself to gate risky actions before the worker runs,
-   set `default_action=ActionClass.EXTERNAL_SEND` in `GmailInboxConfig` —
-   then owner external-send requests park in `awaiting_review` until
-   confirmed. With the default action class the send gate lives at the tool
-   layer (step 4), which is equally effective.
-4. `GmailTools.gmail_create_draft` works freely; `gmail_send` stays blocked
-   until you grant a **one-shot** confirmation — `tools.confirm_send(to=addr)`
-   (recipient-bound) or `tools.confirm_once()` — typically right after you
-   `approve_task(...)`. Each grant authorizes exactly one send. Add
-   `task_id=rec.task_id` to bind the grant to that one task, so under
-   concurrent inbound it can't be consumed by a different task's send.
+1. `TelegramInbox` polls for new messages and emits one per message, carrying
+   the **server-verified** sender id (`message.from.id`) — nothing to forge.
+2. `TelegramPolicy` classifies: the `OWNER_ID` is `OWNER_VERIFIED`; a bot or any
+   other user is `UNKNOWN` → **rejected** before the model sees the text.
+3. `action_classifier` labels intent. A benign question runs and the answer is
+   sent straight back to your chat (two-way, no tool wiring). A risky one parks
+   in `awaiting_review`.
+4. `reviewer.notify_pending()` messages you: *"🔔 approve? `/approve <id>` /
+   `/reject <id>`"*. Your reply is caught by `command_filter` (consumed as a
+   command, not run as a task) and applied via compare-and-swap. Approve → it
+   runs on the next tick; reject → it's dropped.
+
+> Because the sender id can't be spoofed and only the owner is trusted, the
+> attack surface is small by construction. Add `allowed_user_ids=[...]` to let
+> named others in (as `EXTERNAL_VERIFIED`) — and gate any tool that sends,
+> pays, deletes, or runs code, since the action label expresses *intent*, not a
+> tool sandbox (see [what the policy does and doesn't gate](#a-note-on-what-the-policy-does-and-doesnt-gate)).
+
+**Load & stress test it offline** (no token, no network) with
+[`deploy/tg-bot/loadtest.py`](deploy/tg-bot/loadtest.py): it drives the real
+inbox + agent + reviewer through a fake client and checks throughput, dedup, the
+HITL approve/reject flow, crash-recovery (no double-execution), and retention.
+
+### Also: watching Gmail (push or polling)
+
+The same shape works for email. **The default way to watch Gmail is push
+notifications, not polling** (`users.watch` + Cloud Pub/Sub → **zero** Gmail API
+calls while quiet, one cheap `history.list` per arrival) — see
+[`examples/04_gmail_push.py`](examples/04_gmail_push.py) for the ~10-min Pub/Sub
+setup. The polling `GmailInbox` is the zero-setup quick start:
+
+```python
+from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
+from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install 'lazypulse[gmail]'
+
+OWNER = "you@example.com"
+client = GmailClient.from_credentials(
+    credentials_path="credentials.json", token_path="token.json",
+    scopes=["https://www.googleapis.com/auth/gmail.metadata"],
+)
+pulse = PulseAgent(
+    name="inbox-assistant",
+    engine=LLMEngine("claude-opus-4-8", system="You triage and draft email replies."),
+    tools=[GmailTools(client, allowed_recipients=[OWNER])],   # draft freely; send is gated
+    store=Store(db="pulse.db"),
+    policy=GmailPolicy(owner_emails=[OWNER]),                 # only verified owner mail acts
+    adapters=[GmailInbox(client, GmailInboxConfig(account=OWNER, query="is:unread"))],
+    tick_seconds=15.0,
+)
+pulse.serve()
+```
+
+Here `GmailPolicy` classifies the sender from its DKIM/SPF/DMARC result: owner
+mail that passes DKIM + DMARC is `OWNER_VERIFIED_EMAIL`, a spoof or stranger is
+not. `GmailTools.gmail_create_draft` works freely; `gmail_send` stays blocked
+until a **one-shot**, recipient-bound, task-bound confirmation
+(`tools.confirm_send(to=addr, task_id=rec.task_id)`) — typically granted right
+after you `approve_task(...)`. Unlike Telegram, email identity rests on a
+conservative MVP parser of Gmail's own header, so it takes more care to run
+safely; that is the other reason Telegram is the recommended starting point.
 
 ---
 
@@ -408,9 +455,17 @@ for key in store.keys():
 
 ### Human review from anywhere
 
-For tasks that need a human (`awaiting_review`, or a worker's `verify` step),
-`StoreReviewerUI` parks the question in the Store instead of a terminal — so a
-phone, a CLI, or a Slack bot on the same Store can answer it:
+**Over Telegram (recommended).** `TelegramReviewer` closes the loop through the
+bot you already talk to: it messages the owner about each parked task and turns
+the owner's `/approve <id>` / `/reject <id>` reply into the decision — wire
+`command_filter=reviewer.handle_command` and call `reviewer.notify_pending()`
+each tick (see the assistant example above). Only the owner's server-verified id
+may approve. It uses the pre-run review queue (the task is `awaiting_review`, not
+`running`), so it is never touched by the crash-recovery clock.
+
+For tasks that need a human mid-run (a worker's `verify` step), `StoreReviewerUI`
+parks the question in the Store instead of a terminal — so a phone, a CLI, or a
+Slack bot on the same Store can answer it:
 
 ```python
 from lazybridge import Agent
@@ -445,14 +500,18 @@ Both are compare-and-swap, so two reviewers on one Store can't double-act.
 
 The policy authorizes **inbound execution** — whether a message reaches the
 worker at all. It does **not** sandbox the tools your agent then calls. If the
-worker has a tool that sends email or runs code, guard that tool itself
-(as `GmailTools` gates `gmail_send`) or wrap it — the policy won't stop a tool
-call mid-run.
+worker has a tool that sends, pays, deletes, or runs code, guard that tool
+itself (as `GmailTools` gates `gmail_send`) or wrap it — the policy won't stop a
+tool call mid-run. The `action_class`/`action_classifier` express *intent* (and
+route risky intent to review); they do not automatically constrain tool calls.
 
-`GmailPolicy`'s DKIM/SPF/DMARC handling is a conservative MVP parser of
-Gmail's own `Authentication-Results` header, not a full standalone email
-authentication verifier. It's sound for "is this really my owner address",
-but if you need rigorous multi-hop verification, validate upstream.
+**Telegram** gives the strongest identity signal: `message.from.id` is verified
+by Telegram's servers and cannot be spoofed, so `TelegramPolicy` needs no
+parsing and a stranger is rejected outright. **Gmail** is weaker: `GmailPolicy`'s
+DKIM/SPF/DMARC handling is a conservative MVP parser of Gmail's own
+`Authentication-Results` header — sound for "is this really my owner address",
+but if you need rigorous multi-hop verification, validate upstream. This is why
+Telegram is the recommended channel to start with.
 
 ---
 

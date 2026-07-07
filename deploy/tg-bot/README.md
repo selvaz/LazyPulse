@@ -4,9 +4,16 @@ Bot Telegram conversazionale che gira **24/7** su [Railway](https://railway.app)
 (o Render), gestibile **interamente da mobile**: codice via app GitHub, tutto il
 resto dalla dashboard web.
 
-- `bot.py` — il bot (`PulseAgent.serve()`, loop infinito).
+- `bot.py` — il bot (loop always-on + notifier human-in-the-loop).
+- `loadtest.py` — harness di test/stress (offline, senza token: throughput,
+  dedup, flusso HITL, recovery, retention). Vedi in fondo.
 - `Dockerfile` — immagine pronta (installa le 3 librerie dai repo pubblici).
 - `requirements.txt` — dipendenze (API moderna da GitHub).
+
+**Human-in-the-loop:** quando chiedi al bot un'azione rischiosa (parole come
+*invia, manda, cancella, paga* — configurabili), il task viene parcheggiato e il
+bot ti manda un messaggio: rispondi **`/approve <id>`** o **`/reject <id>`**.
+Solo l'owner può approvare.
 
 ---
 
@@ -23,7 +30,7 @@ resto dalla dashboard web.
 ## Deploy su Railway — passi da mobile
 
 1. **railway.app** → accedi con GitHub → **New Project** → **Deploy from GitHub repo**
-   → scegli **`selvaz/LazyPulse`**, branch **`claude/telegram-api-deepseek-test-t78da9`**.
+   → scegli **`selvaz/LazyPulse`**, branch **`main`**.
 2. Apri il servizio → **Settings → Root Directory** = **`deploy/tg-bot`**.
    Railway rileva il `Dockerfile` da solo.
 3. **Variables** → aggiungi:
@@ -31,14 +38,18 @@ resto dalla dashboard web.
    - `OWNER_ID` = il tuo user_id
    - `DEEPSEEK_API_KEY` = la chiave DeepSeek
    - *(opzionali)* `MODEL=deepseek-v4-flash`, `SYSTEM_PROMPT=...`, `TICK_SECONDS=3`
+   - *(store always-on)* `RETENTION_SECONDS=604800` (7g, pota record + rate-bucket), `STALE_AFTER=600`
+   - *(HITL)* `REVIEW_KEYWORDS=invia,manda,cancella,paga,...` (default attivo; `REVIEW_KEYWORDS=` per spegnerlo)
    - *(crawler)* `ENABLE_CRAWLER=1` (default), `CRAWL_CONTENT=pure` (o `ml`), `CRAWL_MAX_PAGES=5`, `CRAWL_MAX_DEPTH=1`
 4. **Volume persistente** (fondamentale): aggiungi un Volume con **Mount path = `/data`**.
    È dove vive `pulse.db` (offset Telegram + dedupe + task). Senza, a ogni redeploy
    il bot "dimentica" lo stato.
 5. **Una sola istanza**: in Settings tieni **Replicas = 1** e niente autoscaling.
    Due processi che pollano lo stesso bot causano `409 Conflict` su Telegram.
-6. **Deploy**. Apri i **Logs**: deve comparire `[tg-deepseek] avvio | model=...`.
-   Scrivi al bot su Telegram → ti risponde l'agente DeepSeek. ✅
+6. **Deploy**. Apri i **Logs**: deve comparire `[tg-deepseek] avvio | model=... hitl=on`.
+   Scrivi al bot su Telegram → ti risponde l'agente DeepSeek. ✅ Chiedi qualcosa
+   di "rischioso" (es. *"invia il report a Bob"*) → il bot ti chiede
+   `/approve <id>` prima di procedere.
 
 > **Render**, in alternativa: crea un **Background Worker** (non un Web Service,
 > così non "dorme"), *Root Directory* `deploy/tg-bot`, runtime Docker, aggiungi un
@@ -71,12 +82,31 @@ Manopole utili (env var): `CRAWL_CONTENT=pure` (default, **zero token LLM**, leg
 > alzare `max_pages` a decine/centinaia, o crawl massivi in loop → è quello che
 > Railway considera "scraping abusivo".
 
+## Test & stress test (offline, senza token)
+
+Prima di deployare — o dopo una modifica — verifica tutto in locale con
+`loadtest.py`: guida i componenti **reali** (inbox + agente + reviewer) con un
+client Telegram finto, senza rete.
+
+```bash
+python deploy/tg-bot/loadtest.py                 # stress offline (default: 2000 msg)
+python deploy/tg-bot/loadtest.py --messages 5000 # più carico
+python deploy/tg-bot/loadtest.py --live          # smoke test live (serve BOT_TOKEN, OWNER_ID)
+```
+
+Controlla: **throughput + dedup**, **HITL** (approve/reject via /comando),
+**recovery senza doppia esecuzione**, **retention** che limita lo Store. La
+modalità `--live` è un semplice round-trip gentile: lo stress pesante va fatto
+offline (Telegram rate-limita/sospende sotto carico).
+
 ## Note & troubleshooting
 
 | Sintomo | Causa | Fix |
 |---|---|---|
 | Build fallisce sul `pip install` | `git` assente / rete | il `Dockerfile` installa `git`; ricontrolla i log di build |
 | Il bot non risponde | mittente ≠ `OWNER_ID` | `TelegramPolicy` accetta solo l'owner verificato; controlla `OWNER_ID` |
+| Chiedi un'azione ma "non fa niente" | è in attesa di approvazione HITL | controlla i messaggi del bot e rispondi `/approve <id>`; o allenta `REVIEW_KEYWORDS` |
+| Lo Store cresce troppo | retention non impostata | imposta `RETENTION_SECONDS` (default 7g già attivo nel bot) |
 | `409 Conflict` nei log | due poller sullo stesso bot | tieni **1 replica** e non far girare il bot anche altrove (Colab/locale) |
 | Stato perso dopo un redeploy | Volume non montato | monta un Volume su `/data` (vedi passo 4) |
 | Nessun `reasoning_content`/tool | thinking mode | il bot non usa thinking (corretto): DeepSeek in thinking non supporta i tool |

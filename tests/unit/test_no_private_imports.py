@@ -47,7 +47,7 @@ def _imported_modules(tree: ast.AST) -> set[str]:
 def test_no_private_lazybridge_imports() -> None:
     offenders: list[str] = []
     for path in SRC.rglob("*.py"):
-        tree = ast.parse(path.read_text(), filename=str(path))
+        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
         for module in _imported_modules(tree):
             if module.startswith("lazybridge") and _is_forbidden(module):
                 offenders.append(f"{path.relative_to(SRC)}: {module}")

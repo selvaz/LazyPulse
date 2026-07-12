@@ -15,13 +15,15 @@ python -m pip install -e '.[dev]'
 ```
 
 `lazytoolkit` (the Gmail/Telegram clients + tools) is **GitHub-only** — only
-LazyBridge is on PyPI. The `[dev]` extra already pins it to the same release
-tag CI uses, so the editable install above pulls it in. To install it on its
-own:
+LazyBridge is on PyPI. The `[dev]` extra already pins it to the exact
+`lazytoolkit` release tag that CI resolves (see `pyproject.toml`), so the
+editable install above pulls in the same revision CI tests. To install it on
+its own — pinned to that same tag so you debug against what CI exercises, not
+an arbitrary `main`:
 
 ```bash
 python -m pip install \
-  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git"
+  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@v0.3.2"
 ```
 
 > Note: the distribution is named `lazytoolkit` but imports as `lazytools`

@@ -19,8 +19,8 @@ header selection), so the [trust policy](security.md) works identically.
 ## Install
 
 ```bash
-pip install "lazypulse[gmail,webhook] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"   # push: gmail client + HTTP pieces
-pip install "lazypulse[gmail] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"           # polling only
+pip install "lazypulse[gmail,webhook] @ git+https://github.com/selvaz/LazyPulse.git"   # push: gmail client + HTTP pieces
+pip install "lazypulse[gmail] @ git+https://github.com/selvaz/LazyPulse.git"           # polling only
 ```
 
 ## Push, end to end

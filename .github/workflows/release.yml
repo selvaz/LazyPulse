@@ -1,15 +1,14 @@
 name: release
 
-# Publish to PyPI on a version tag (``v0.1.0`` etc.) via PyPI Trusted
-# Publishing (OIDC) — no API token in repo secrets.
+# Publish a GitHub Release on a version tag (``v0.3.1`` etc.).
 #
-# One-off PyPI setup (Project → Publishing → add a GitHub Actions publisher;
-# use a *pending* publisher if the project doesn't exist yet):
-#   Owner: selvaz · Repository: LazyPulse · Workflow: release.yml · Environment: pypi
+# Distribution model: only LazyBridge lives on PyPI. lazypulse is
+# distributed exclusively via GitHub — immutable tags plus wheel/sdist
+# attached to the GitHub Release with SHA-256 checksums. This workflow
+# deliberately does NOT publish to PyPI.
 #
-# The first 0.1.0 upload is done manually with twine (lazytoolkit is not on PyPI
-# yet, so the test job below installs it from git); this workflow handles every
-# subsequent tagged release.
+# Gate chain: tests → build + wheel-metadata check + clean-venv install
+# smoke → GitHub Release with checksummed artifacts.
 
 on:
   push:
@@ -30,9 +29,8 @@ jobs:
       - name: Install
         run: |
           python -m pip install --upgrade pip
-          # lazytoolkit is not on PyPI yet; install the sibling from the public
-          # LazyTools repo, pinned to the same commit the other workflows use.
-          pip install "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@3dc5c7dca10d69dd12c97b8dc6a54da8423706d5"
+          # The dev extra pins lazytoolkit to the same immutable release tag
+          # users get — CI must not pre-install a different revision.
           pip install -e ".[dev]"
       - name: Ruff
         run: ruff check src tests
@@ -42,7 +40,7 @@ jobs:
         run: pytest -q
 
   build:
-    name: build sdist + wheel
+    name: build + verify artifacts
     needs: test
     runs-on: ubuntu-latest
     steps:
@@ -65,32 +63,52 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build
+      - name: Verify wheel metadata (Requires-Dist)
+        run: python tools/check_wheel_metadata.py dist/
+      - name: Install wheel in clean venv + pip check + import smoke
+        run: |
+          python -m venv /tmp/wheel-smoke
+          /tmp/wheel-smoke/bin/pip install --upgrade pip
+          /tmp/wheel-smoke/bin/pip install dist/*.whl
+          /tmp/wheel-smoke/bin/pip check
+          /tmp/wheel-smoke/bin/python -c "import lazybridge, lazypulse; print('lazybridge', lazybridge.__version__)"
+      - name: Generate SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum * > SHA256SUMS.txt
+          cat SHA256SUMS.txt
       - name: Upload distribution artefacts
         uses: actions/upload-artifact@v4
         with:
           name: dist
           path: dist/
 
-  publish:
-    name: publish to PyPI
+  release:
+    name: publish GitHub Release
     needs: build
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/p/lazypulse
     permissions:
-      id-token: write  # required for PyPI Trusted Publishing (OIDC)
+      contents: write  # create the release and upload assets
     steps:
       - name: Download distribution artefacts
         uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist/
-      - name: Publish to PyPI
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Create GitHub Release with artifacts
+        uses: softprops/action-gh-release@v2
         with:
-          packages-dir: dist/
-          # The first 0.1.0 upload is done manually; skip-existing makes a
-          # tag for an already-published version a graceful no-op instead of
-          # a hard duplicate-upload failure (also covers accidental re-tags).
-          skip-existing: true
+          files: |
+            dist/*.whl
+            dist/*.tar.gz
+            dist/SHA256SUMS.txt
+          fail_on_unmatched_files: true
+          generate_release_notes: true
+          body: |
+            Install (GitHub-only distribution — lazypulse is not on PyPI):
+
+            ```
+            pip install "lazypulse @ git+https://github.com/selvaz/LazyPulse.git@${{ github.ref_name }}"
+            ```
+
+            Or download the wheel below and verify it against `SHA256SUMS.txt`.

@@ -7,6 +7,28 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.1] — 2026-07-12
+
+### Distribution
+- lazypulse is distributed **exclusively via GitHub**: install with
+  `pip install "lazypulse @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"`
+  or from the wheel attached to the GitHub Release (SHA-256 checksums
+  published alongside). Only LazyBridge lives on PyPI; `lazypulse` is not
+  and will not be a PyPI package.
+- The release workflow now builds wheel + sdist, verifies the built wheel's
+  `Requires-Dist` metadata, smoke-installs the wheel in a clean venv, and
+  attaches the artifacts with checksums to a GitHub Release (it no longer
+  targets PyPI).
+
+### Fixed — divergent lazytoolkit pins (ecosystem P0)
+- `pyproject.toml` pinned lazytoolkit to commit `328a18e…` while every CI
+  workflow pre-installed commit `3dc5c7d…`: the configuration CI tested was
+  not the one the package declared. All references now point to the single
+  immutable release tag `v0.3.2`, and the CI pre-install step is gone — CI
+  resolves the same dependency graph users get from `pip install -e ".[dev]"`.
+- The lazytoolkit ref is governed by LazyTools' `ecosystem/compatibility.toml`
+  and only changes via a PR that updates that manifest.
+
 ### Added
 - **`TelegramReviewer`** — human-in-the-loop review over the Telegram bot the
   owner already talks to. `notify_pending()` announces each `awaiting_review`

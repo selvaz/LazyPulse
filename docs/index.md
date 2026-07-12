@@ -46,10 +46,10 @@ approval — right in the chat — before anything risky actually happens.
 ## Install
 
 ```bash
-pip install lazypulse                    # core tick loop + policy
-pip install 'lazypulse[telegram]'        # Telegram inbox & send  ← recommended start
-pip install 'lazypulse[gmail,webhook]'   # Gmail intake — push notifications, the default
-pip install 'lazypulse[webhook]'         # HTTP intake adapter
+pip install "lazypulse @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"                    # core tick loop + policy
+pip install "lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"        # Telegram inbox & send  ← recommended start
+pip install "lazypulse[gmail,webhook] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"   # Gmail intake — push notifications, the default
+pip install "lazypulse[webhook] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"         # HTTP intake adapter
 ```
 
 ## Start with Telegram

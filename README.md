@@ -41,17 +41,21 @@ loop**, a **trust policy**, and **inbound adapters**.
 
 ## Install
 
+LazyPulse is distributed from GitHub at a release tag (only LazyBridge is on
+PyPI). Add an extra to the direct reference:
+
 ```bash
-pip install lazypulse                # core tick loop + policy
-pip install 'lazypulse[telegram]'    # + Telegram inbox & send  ← the recommended start
-pip install 'lazypulse[gmail,webhook]'  # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
-pip install 'lazypulse[webhook]'     # + HTTP intake
-pip install 'lazypulse[outlook]'     # + local Outlook desktop inbox (Windows, via LazyTools)
-pip install 'lazypulse[cron]'        # + cron-expression scheduling
-pip install 'lazypulse[dev]'         # test + lint toolchain
+G="git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
+pip install "lazypulse @ $G"                # core tick loop + policy
+pip install "lazypulse[telegram] @ $G"      # + Telegram inbox & send  ← the recommended start
+pip install "lazypulse[gmail,webhook] @ $G" # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
+pip install "lazypulse[webhook] @ $G"       # + HTTP intake
+pip install "lazypulse[outlook] @ $G"       # + local Outlook desktop inbox (Windows, via LazyTools)
+pip install "lazypulse[cron] @ $G"          # + cron-expression scheduling
+pip install "lazypulse[dev] @ $G"           # test + lint toolchain
 ```
 
-A bare `pip install lazypulse` does **not** pull the Google libraries or
+A bare `lazypulse` core does **not** pull the Google libraries or
 starlette — those come only with the extras. The `[gmail]` / `[telegram]`
 extras pull `lazytoolkit[...]`: the inbound adapters (inbox + trust policy)
 live in LazyPulse, while the matching clients and guarded send tools
@@ -122,7 +126,7 @@ from lazypulse.adapters.telegram import (
     TelegramInbox, TelegramInboxConfig, TelegramPolicy, TelegramReviewer,
 )
 from lazypulse.models import ActionClass
-from lazytools.connectors.telegram import TelegramClient  # pip install 'lazypulse[telegram]'
+from lazytools.connectors.telegram import TelegramClient  # pip install "lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
 
 OWNER_ID = 123456789                       # your Telegram user id (message.from.id)
 client = TelegramClient.from_token("123:AA...")
@@ -195,7 +199,7 @@ setup. The polling `GmailInbox` is the zero-setup quick start:
 
 ```python
 from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
-from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install 'lazypulse[gmail]'
+from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install "lazypulse[gmail] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
 
 OWNER = "you@example.com"
 client = GmailClient.from_credentials(
@@ -280,7 +284,7 @@ pulse.schedule_cron("send the weekly report", "0 9 * * 1")  # every Mon 09:00
 `schedule_cron(text, cron, tz="UTC")` registers a **recurring** task from a
 5-field cron expression and returns a `cron_id`; the tick loop fires it on
 schedule and advances the next fire time atomically. It needs the `cron` extra
-(`pip install 'lazypulse[cron]'`). The other three `schedule_*` calls are
+(`pip install "lazypulse[cron] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"`). The other three `schedule_*` calls are
 one-shots.
 
 A `schedule`-only agent (no adapters) needs no policy. Combine with a small

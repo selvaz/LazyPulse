@@ -14,13 +14,14 @@ type-check, and respect the lazybridge boundary locally. See
 python -m pip install -e '.[dev]'
 ```
 
-`lazytoolkit` is **not on PyPI yet** (the Gmail/Telegram clients + tools live
-there). Until it ships, install it from the public LazyTools repo, pinned to the
-same commit CI uses (see `.github/workflows/boundary.yml` for the current SHA):
+`lazytoolkit` (the Gmail/Telegram clients + tools) is **GitHub-only** — only
+LazyBridge is on PyPI. The `[dev]` extra already pins it to the same release
+tag CI uses, so the editable install above pulls it in. To install it on its
+own:
 
 ```bash
 python -m pip install \
-  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@<sha>"
+  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@v0.3.2"
 ```
 
 > Note: the distribution is named `lazytoolkit` but imports as `lazytools`

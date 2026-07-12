@@ -22,7 +22,7 @@ the recommended starting point.
 from lazybridge import LLMEngine, Store
 from lazypulse import PulseAgent
 from lazypulse.adapters.telegram import TelegramInbox, TelegramInboxConfig, TelegramPolicy
-from lazytools.connectors.telegram import TelegramClient  # pip install 'lazypulse[telegram]'
+from lazytools.connectors.telegram import TelegramClient  # pip install "lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
 
 OWNER_ID = 123456789                 # your Telegram user id (message.from.id)
 client = TelegramClient.from_token("123:AA...")

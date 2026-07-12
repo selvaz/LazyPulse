@@ -36,11 +36,11 @@ dependencies = [
 # stays dependency-light for users who only poll Gmail or use custom adapters.
 webhook = ["starlette>=0.37,<1.0", "uvicorn>=0.29,<1.0"]
 # Gmail polling inbox + the extracted client/tools.
-gmail = ["lazytoolkit[gmail]>=0.3.1,<0.4"]
+gmail = ["lazytoolkit[gmail] @ git+https://github.com/selvaz/LazyTools.git@328a18eb4d717f502b06f43e4499d81696f9f6fd"]
 # Local Outlook desktop inbox + the extracted client/tools (Windows/COM).
-outlook = ["lazytoolkit[outlook]>=0.3.1,<0.4"]
+outlook = ["lazytoolkit[outlook] @ git+https://github.com/selvaz/LazyTools.git@328a18eb4d717f502b06f43e4499d81696f9f6fd"]
 # Telegram polling inbox + the extracted client/tool.
-telegram = ["lazytoolkit[telegram]>=0.3.1,<0.4"]
+telegram = ["lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git@328a18eb4d717f502b06f43e4499d81696f9f6fd"]
 # Cron-expression based scheduling (CronTrigger / schedule_cron).
 cron = ["croniter>=1.3,<2.0"]
 dev = [
@@ -49,7 +49,7 @@ dev = [
     "pytest-cov>=4.0",
     "httpx>=0.27,<1.0",
     "starlette>=0.37,<1.0",
-    "lazytoolkit>=0.3.1,<0.4",
+    "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@328a18eb4d717f502b06f43e4499d81696f9f6fd",
     "ruff>=0.6",
     "mypy>=1.10",
     "croniter>=1.3,<2.0",

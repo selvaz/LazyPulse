@@ -63,6 +63,11 @@ Repository = "https://github.com/selvaz/LazyPulse"
 Changelog = "https://github.com/selvaz/LazyPulse/blob/main/CHANGELOG.md"
 Issues = "https://github.com/selvaz/LazyPulse/issues"
 
+[tool.hatch.metadata]
+# Required so lazytoolkit can be pinned to its GitHub source (PEP 508 direct
+# reference) until the 0.3.2 PyPI release carries lazybridge>=1.0.1.
+allow-direct-references = true
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/lazypulse"]
 

@@ -21,7 +21,7 @@ own:
 
 ```bash
 python -m pip install \
-  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@v0.3.2"
+  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git"
 ```
 
 > Note: the distribution is named `lazytoolkit` but imports as `lazytools`

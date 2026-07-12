@@ -41,11 +41,12 @@ loop**, a **trust policy**, and **inbound adapters**.
 
 ## Install
 
-LazyPulse is distributed from GitHub at a release tag (only LazyBridge is on
-PyPI). Add an extra to the direct reference:
+LazyPulse is distributed from GitHub (only LazyBridge is on PyPI). Add an
+extra to the direct reference — this pulls the current `main`; append
+`@vX.Y.Z` to pin a release tag:
 
 ```bash
-G="git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
+G="git+https://github.com/selvaz/LazyPulse.git"
 pip install "lazypulse @ $G"                # core tick loop + policy
 pip install "lazypulse[telegram] @ $G"      # + Telegram inbox & send  ← the recommended start
 pip install "lazypulse[gmail,webhook] @ $G" # + Gmail intake (push notifications — the default; webhook pulls the HTTP pieces)
@@ -126,7 +127,7 @@ from lazypulse.adapters.telegram import (
     TelegramInbox, TelegramInboxConfig, TelegramPolicy, TelegramReviewer,
 )
 from lazypulse.models import ActionClass
-from lazytools.connectors.telegram import TelegramClient  # pip install "lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
+from lazytools.connectors.telegram import TelegramClient  # pip install "lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git"
 
 OWNER_ID = 123456789                       # your Telegram user id (message.from.id)
 client = TelegramClient.from_token("123:AA...")
@@ -199,7 +200,7 @@ setup. The polling `GmailInbox` is the zero-setup quick start:
 
 ```python
 from lazypulse.adapters.gmail import GmailInbox, GmailInboxConfig, GmailPolicy
-from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install "lazypulse[gmail] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"
+from lazytools.connectors.gmail import GmailClient, GmailTools  # pip install "lazypulse[gmail] @ git+https://github.com/selvaz/LazyPulse.git"
 
 OWNER = "you@example.com"
 client = GmailClient.from_credentials(
@@ -284,7 +285,7 @@ pulse.schedule_cron("send the weekly report", "0 9 * * 1")  # every Mon 09:00
 `schedule_cron(text, cron, tz="UTC")` registers a **recurring** task from a
 5-field cron expression and returns a `cron_id`; the tick loop fires it on
 schedule and advances the next fire time atomically. It needs the `cron` extra
-(`pip install "lazypulse[cron] @ git+https://github.com/selvaz/LazyPulse.git@v0.3.1"`). The other three `schedule_*` calls are
+(`pip install "lazypulse[cron] @ git+https://github.com/selvaz/LazyPulse.git"`). The other three `schedule_*` calls are
 one-shots.
 
 A `schedule`-only agent (no adapters) needs no policy. Combine with a small

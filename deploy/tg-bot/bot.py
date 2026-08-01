@@ -33,6 +33,10 @@ si imposta dal pannello web senza toccare il codice:
     CRAWL_MAX_PAGES    (opz.)          default: 5
     CRAWL_MAX_DEPTH    (opz.)          default: 1
     CRAWLER_DB         (opz.)          default: /data/crawler.db  (cache-first, sul Volume)
+
+    # --- registry (LazyTools, catalogo artifact condiviso tra i repo) ---
+    ENABLE_REGISTRY    (opz.)          "1" (default) per dare i tool di registry all'agente; "0" per spegnerlo
+                                        (si spegne comunque da sola se lazytools non è installato)
 """
 
 from __future__ import annotations
@@ -118,6 +122,24 @@ def _build_crawler_tools() -> list:
     return crawler.as_tools()
 
 
+def _build_registry_tools() -> list:
+    """Tool del registry DB + catalogo artifact condiviso (LazyTools).
+
+    Nessuna dipendenza/credenziale esterna: se ``lazytools`` non è
+    installato, si spegne da sola invece di far fallire l'avvio del bot.
+    ``allow_write=True`` perché qui l'agente è sotto revisione HITL --
+    a differenza del server MCP (letto anche da client non fidati),
+    è appropriato lasciargli registrare artifact di default.
+    """
+    if os.environ.get("ENABLE_REGISTRY", "1") != "1":
+        return []
+    try:
+        from lazytools.registry import RegistryTools
+    except ImportError:
+        return []
+    return RegistryTools(allow_write=True).as_tools()
+
+
 def main() -> None:
     token = _require("BOT_TOKEN")
     owner_id = int(_require("OWNER_ID"))
@@ -143,7 +165,7 @@ def main() -> None:
 
     client = TelegramClient.from_token(token)
     store = Store(db=db_path)                            # persistente: serve un Volume montato
-    tools = _build_crawler_tools()   # aggiungi qui altri tool (Gmail, MCP, funzioni tue): vanno tutti in tools=[...]
+    tools = _build_crawler_tools() + _build_registry_tools()   # aggiungi qui altri tool (Gmail, MCP, funzioni tue): vanno tutti in tools=[...]
 
     # Human-in-the-loop via Telegram: quando un task viene parcheggiato per
     # approvazione (``awaiting_review``), il reviewer manda un messaggio

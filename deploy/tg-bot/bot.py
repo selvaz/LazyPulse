@@ -39,6 +39,8 @@ si imposta dal pannello web senza toccare il codice:
                                         (si spegne comunque da sola se lazytools non è installato)
     REGISTRY_ALLOW_WRITE (opz.)        "0" (default, sola lettura) | "1" per abilitare artifact_register
                                         (nessun gate HITL per-tool-call: vedi _build_registry_tools)
+    PULSE_ARTIFACTS_DB   (opz.)        default: /data/pulse_artifacts.db  (catalogo artifact di LazyPulse,
+                                        sul Volume così sopravvive ai redeploy; usato solo se REGISTRY_ALLOW_WRITE=1)
 """
 
 from __future__ import annotations
@@ -146,6 +148,11 @@ def _build_registry_tools() -> list:
         from lazytools.registry import RegistryTools
     except ImportError:
         return []
+    # Come STORE_DB/CRAWLER_DB: un default sotto /data così, appena
+    # REGISTRY_ALLOW_WRITE=1, artifact_register ha subito un posto dove
+    # scrivere che sopravvive ai redeploy, invece di richiedere che
+    # l'operatore imposti PULSE_ARTIFACTS_DB a mano prima che funzioni.
+    os.environ.setdefault("PULSE_ARTIFACTS_DB", "/data/pulse_artifacts.db")
     allow_write = os.environ.get("REGISTRY_ALLOW_WRITE", "0") == "1"
     return RegistryTools(allow_write=allow_write).as_tools()
 

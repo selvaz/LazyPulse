@@ -33,6 +33,14 @@ si imposta dal pannello web senza toccare il codice:
     CRAWL_MAX_PAGES    (opz.)          default: 5
     CRAWL_MAX_DEPTH    (opz.)          default: 1
     CRAWLER_DB         (opz.)          default: /data/crawler.db  (cache-first, sul Volume)
+
+    # --- registry (LazyTools, catalogo artifact condiviso tra i repo) ---
+    ENABLE_REGISTRY      (opz.)        "1" (default) per dare i tool di registry all'agente; "0" per spegnerlo
+                                        (si spegne comunque da sola se lazytools non è installato)
+    REGISTRY_ALLOW_WRITE (opz.)        "0" (default, sola lettura) | "1" per abilitare artifact_register
+                                        (nessun gate HITL per-tool-call: vedi _build_registry_tools)
+    PULSE_ARTIFACTS_DB   (opz.)        default: /data/pulse_artifacts.db  (catalogo artifact di LazyPulse,
+                                        sul Volume così sopravvive ai redeploy; usato solo se REGISTRY_ALLOW_WRITE=1)
 """
 
 from __future__ import annotations
@@ -118,6 +126,37 @@ def _build_crawler_tools() -> list:
     return crawler.as_tools()
 
 
+def _build_registry_tools() -> list:
+    """Tool del registry DB + catalogo artifact condiviso (LazyTools).
+
+    Nessuna dipendenza/credenziale esterna: se ``lazytools`` non è
+    installato, si spegne da sola invece di far fallire l'avvio del bot.
+
+    Read-only di default (``registry_status``/``artifact_search``/
+    ``artifact_get``), come il server MCP: l'HITL qui classifica il
+    *messaggio* in ingresso una volta sola (vedi ``_build_action_classifier``),
+    non le singole tool call dell'LLM durante il run -- un task già
+    autorizzato come READ_PUBLIC (es. "riassumi questa pagina") gira con
+    accesso pieno ai tool, quindi un contenuto crawlato con istruzioni
+    iniettate potrebbe invocare ``artifact_register`` senza revisione.
+    ``REGISTRY_ALLOW_WRITE=1`` abilita esplicitamente la scrittura per chi
+    accetta questo rischio.
+    """
+    if os.environ.get("ENABLE_REGISTRY", "1") != "1":
+        return []
+    try:
+        from lazytools.registry import RegistryTools
+    except ImportError:
+        return []
+    # Come STORE_DB/CRAWLER_DB: un default sotto /data così, appena
+    # REGISTRY_ALLOW_WRITE=1, artifact_register ha subito un posto dove
+    # scrivere che sopravvive ai redeploy, invece di richiedere che
+    # l'operatore imposti PULSE_ARTIFACTS_DB a mano prima che funzioni.
+    os.environ.setdefault("PULSE_ARTIFACTS_DB", "/data/pulse_artifacts.db")
+    allow_write = os.environ.get("REGISTRY_ALLOW_WRITE", "0") == "1"
+    return RegistryTools(allow_write=allow_write).as_tools()
+
+
 def main() -> None:
     token = _require("BOT_TOKEN")
     owner_id = int(_require("OWNER_ID"))
@@ -143,7 +182,7 @@ def main() -> None:
 
     client = TelegramClient.from_token(token)
     store = Store(db=db_path)                            # persistente: serve un Volume montato
-    tools = _build_crawler_tools()   # aggiungi qui altri tool (Gmail, MCP, funzioni tue): vanno tutti in tools=[...]
+    tools = _build_crawler_tools() + _build_registry_tools()   # aggiungi qui altri tool (Gmail, MCP, funzioni tue): vanno tutti in tools=[...]
 
     # Human-in-the-loop via Telegram: quando un task viene parcheggiato per
     # approvazione (``awaiting_review``), il reviewer manda un messaggio

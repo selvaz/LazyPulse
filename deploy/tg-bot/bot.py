@@ -35,8 +35,10 @@ si imposta dal pannello web senza toccare il codice:
     CRAWLER_DB         (opz.)          default: /data/crawler.db  (cache-first, sul Volume)
 
     # --- registry (LazyTools, catalogo artifact condiviso tra i repo) ---
-    ENABLE_REGISTRY    (opz.)          "1" (default) per dare i tool di registry all'agente; "0" per spegnerlo
+    ENABLE_REGISTRY      (opz.)        "1" (default) per dare i tool di registry all'agente; "0" per spegnerlo
                                         (si spegne comunque da sola se lazytools non è installato)
+    REGISTRY_ALLOW_WRITE (opz.)        "0" (default, sola lettura) | "1" per abilitare artifact_register
+                                        (nessun gate HITL per-tool-call: vedi _build_registry_tools)
 """
 
 from __future__ import annotations
@@ -127,9 +129,16 @@ def _build_registry_tools() -> list:
 
     Nessuna dipendenza/credenziale esterna: se ``lazytools`` non è
     installato, si spegne da sola invece di far fallire l'avvio del bot.
-    ``allow_write=True`` perché qui l'agente è sotto revisione HITL --
-    a differenza del server MCP (letto anche da client non fidati),
-    è appropriato lasciargli registrare artifact di default.
+
+    Read-only di default (``registry_status``/``artifact_search``/
+    ``artifact_get``), come il server MCP: l'HITL qui classifica il
+    *messaggio* in ingresso una volta sola (vedi ``_build_action_classifier``),
+    non le singole tool call dell'LLM durante il run -- un task già
+    autorizzato come READ_PUBLIC (es. "riassumi questa pagina") gira con
+    accesso pieno ai tool, quindi un contenuto crawlato con istruzioni
+    iniettate potrebbe invocare ``artifact_register`` senza revisione.
+    ``REGISTRY_ALLOW_WRITE=1`` abilita esplicitamente la scrittura per chi
+    accetta questo rischio.
     """
     if os.environ.get("ENABLE_REGISTRY", "1") != "1":
         return []
@@ -137,7 +146,8 @@ def _build_registry_tools() -> list:
         from lazytools.registry import RegistryTools
     except ImportError:
         return []
-    return RegistryTools(allow_write=True).as_tools()
+    allow_write = os.environ.get("REGISTRY_ALLOW_WRITE", "0") == "1"
+    return RegistryTools(allow_write=allow_write).as_tools()
 
 
 def main() -> None:

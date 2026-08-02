@@ -7,6 +7,24 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.3.2] — 2026-08-02
+
+### Added
+- `deploy/tg-bot/bot.py`: the Telegram agent now gets LazyTools' shared DB
+  registry / cross-repo artifact catalog as tools (`registry_status`,
+  `artifact_search`, `artifact_get`, and — opt-in via
+  `REGISTRY_ALLOW_WRITE=1` — `artifact_register`). Defaults
+  `PULSE_ARTIFACTS_DB` to `/data/pulse_artifacts.db` under the mounted
+  volume, matching `STORE_DB`/`CRAWLER_DB`'s existing convention.
+
+### Fixed
+- Registry tools initially defaulted to `allow_write=True`: since this
+  agent's HITL classifies the *inbound message* once at intake rather than
+  gating individual tool calls during a run, an ordinary `READ_PUBLIC`
+  message (e.g. "summarize this URL") could reach `artifact_register`
+  unreviewed if crawled content carried injected instructions. Now
+  defaults to read-only, matching the MCP server's own convention.
+
 ## [0.3.1] — 2026-07-12
 
 ### Distribution

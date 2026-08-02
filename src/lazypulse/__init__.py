@@ -58,7 +58,21 @@ from lazypulse.retry import RetryPolicy
 from lazypulse.review import StoreReviewerUI, pending_reviews, respond
 from lazypulse.tasks import approve_task, pending_tasks, purge_terminal_tasks, reject_task
 
-__version__ = "0.3.0"
+# Single-source the version from installed distribution metadata so
+# ``__version__`` and ``importlib.metadata.version("lazypulse")`` can never
+# disagree. Falls back to a literal only when running from an uninstalled
+# source tree.
+try:
+    from importlib.metadata import PackageNotFoundError
+    from importlib.metadata import version as _dist_version
+
+    try:
+        __version__ = _dist_version("lazypulse")
+    except PackageNotFoundError:  # pragma: no cover — uninstalled source tree
+        __version__ = "0.3.2"
+    del _dist_version, PackageNotFoundError
+except ImportError:  # pragma: no cover — Python < 3.8, unsupported
+    __version__ = "0.3.2"
 
 if TYPE_CHECKING:
     from lazytools.connectors.gmail import GmailTools

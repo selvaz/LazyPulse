@@ -7,6 +7,10 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Changed
+- `gmail`/`outlook`/`telegram`/`dev` extras' `lazytoolkit` pin bumped from
+  `v0.3.2` (75 commits stale) to `v0.5.0`.
+
 ## [0.3.2] — 2026-08-02
 
 ### Added

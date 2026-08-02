@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "lazypulse"
-version = "0.3.1"
+version = "0.3.2"
 description = "Always-on agents: a tick loop, a trust policy, and inbound adapters on top of lazybridge."
 readme = "README.md"
 license = { text = "Apache-2.0" }

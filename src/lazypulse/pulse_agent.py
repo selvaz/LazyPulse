@@ -51,6 +51,7 @@ if TYPE_CHECKING:
 
     from lazypulse.adapters.base import Adapter
     from lazypulse.policy import PulsePolicy
+    from lazypulse.schedules import Calendar, CalendarSync, ScheduleEntry, ScheduleRecord
 
 #: Hard cap on automatic restarts of a stale ``running`` record before it is
 #: marked ``failed``. Prevents a poison task from being retried forever.
@@ -69,6 +70,7 @@ class PulseAgent(Agent):
         *,
         adapters: list[Adapter] | None = None,
         policy: PulsePolicy | None = None,
+        calendar: Calendar | None = None,
         tick_seconds: float = 1.0,
         max_concurrent_inbound: int = 4,
         stale_after: float | None = None,
@@ -185,6 +187,12 @@ class PulseAgent(Agent):
         # accurate completed/failed counts. Only touched on the loop thread.
         self._bg_completed = 0
         self._bg_failed = 0
+        # Reconcile the declared calendar last: it needs ``self._clock`` and a
+        # validated Store, and it is the one piece of __init__ that writes.
+        self._calendar = calendar
+        self._calendar_sync: CalendarSync | None = None
+        if calendar is not None:
+            self._calendar_sync = calendar.sync(self.store, now=self._clock())
 
     # ------------------------------------------------------------------ #
     # Lifecycle — all synchronous; the event loop is hidden in a thread.
@@ -323,6 +331,7 @@ class PulseAgent(Agent):
         *,
         run_at: datetime | None = None,
         action: ActionClass = ActionClass.READ_PUBLIC,
+        task_id: str | None = None,
     ) -> str:
         """Enqueue a task to run at ``run_at`` (default: now). Returns its ``task_id``.
 
@@ -330,9 +339,16 @@ class PulseAgent(Agent):
         run work on a schedule. Programmatic scheduling is **trusted**: the
         caller is your own code, so it bypasses the policy (which exists to
         authorize *external* inbound messages). The loop runs it on the first
-        tick where ``run_at <= now``."""
+        tick where ``run_at <= now``.
+
+        ``task_id`` lets the caller pre-generate the id. The schedule firing
+        path uses it to record the link from a schedule to the task it produced
+        *in the same compare-and-swap that claims the occurrence* — the claim
+        has to land before the task is written, or two agents sharing a Store
+        could both fire the same slot."""
         now = self._clock()
         record = PulseRecord(
+            task_id=task_id if task_id is not None else str(uuid.uuid4()),
             text=text,
             status="scheduled",
             created_at=now,
@@ -353,31 +369,113 @@ class PulseAgent(Agent):
         """Schedule a task to run at the absolute time ``when``. Returns its ``task_id``."""
         return self.schedule(text, run_at=when, **kwargs)
 
-    def schedule_cron(self, text: str, cron: str, tz: str = "UTC") -> str:
-        """Register a recurring cron task. Returns the ``cron_id``.
+    # ------------------------------------------------------------------ #
+    # Recurring schedules (the calendar)
+    # ------------------------------------------------------------------ #
+    def add_schedule(self, entry: ScheduleEntry) -> str:
+        """Register (or update) one recurring entry ad hoc. Returns its name.
 
-        Requires the ``cron`` extra (``pip install 'lazypulse[cron]'``).
+        The ad-hoc counterpart to declaring a :class:`~lazypulse.Calendar`: the
+        entry is keyed by name, so calling this twice with the same name
+        updates it rather than creating a second one. Ad-hoc entries are
+        ``managed=False`` and so are never pruned by a calendar sync.
+
+        Prefer a ``Calendar`` for anything that should survive a restart — it
+        keeps the declaration in code, where it can be reviewed.
         """
-        from lazypulse.cron import CronTrigger
+        from lazypulse.schedules import After, Cron, ScheduleRecord
 
-        trigger = CronTrigger(cron, tz)
-        now = self._clock()
-        next_dt = trigger.next(now)
-        cron_id = str(uuid.uuid4())
-        key = store_keys.CRON.format(cron_id=cron_id)
         assert self.store is not None
-        self.store.write(
-            key,
-            {
-                "cron_id": cron_id,
-                "text": text,
-                "expr": cron,
-                "tz": tz,
-                "next_fire_at": next_dt.isoformat(),
-                "created_at": now.isoformat(),
-            },
+        if not isinstance(entry, Cron | After):
+            raise TypeError(f"Expected a Cron or After entry, got {type(entry).__name__}")
+        now = self._clock()
+        key = store_keys.schedule_key(entry.name)
+        raw = self.store.read(key)
+        if isinstance(raw, dict):
+            existing = ScheduleRecord.model_validate(raw)
+            next_fire_at = entry.next_after(now) if isinstance(entry, Cron) else None
+            self.store.write(
+                key,
+                existing.model_copy(update={"spec": entry, "next_fire_at": next_fire_at}).model_dump(mode="json"),
+            )
+        else:
+            record = ScheduleRecord(
+                spec=entry,
+                created_at=now,
+                managed=False,
+                next_fire_at=entry.next_after(now) if isinstance(entry, Cron) else None,
+            )
+            self.store.write(key, record.model_dump(mode="json"))
+        return entry.name
+
+    def schedule_cron(
+        self,
+        name: str,
+        text: str,
+        expr: str,
+        *,
+        tz: str = "UTC",
+        action: ActionClass = ActionClass.READ_PUBLIC,
+        misfire_grace: timedelta | None = None,
+        overlap: str = "skip",
+        on_days: Any = None,
+    ) -> str:
+        """Register a recurring cron task under ``name``. Returns the name.
+
+        Shorthand for ``add_schedule(Cron(...))``. Requires the ``cron`` extra
+        (``pip install 'lazypulse[cron]'``).
+        """
+        from lazypulse.schedules import Cron
+
+        return self.add_schedule(
+            Cron(
+                name=name,
+                text=text,
+                expr=expr,
+                tz=tz,
+                action=action,
+                misfire_grace=misfire_grace,
+                overlap=overlap,  # type: ignore[arg-type]
+                on_days=on_days,
+            )
         )
-        return cron_id
+
+    def list_schedules(self) -> list[ScheduleRecord]:
+        """Every registered schedule with its live state, sorted by name."""
+        from lazypulse.schedules import list_schedules
+
+        assert self.store is not None
+        return list_schedules(self.store)
+
+    def get_schedule(self, name: str) -> ScheduleRecord | None:
+        """One schedule by name, or ``None``."""
+        from lazypulse.schedules import get_schedule
+
+        assert self.store is not None
+        return get_schedule(self.store, name)
+
+    def pause_schedule(self, name: str) -> bool:
+        """Stop a schedule from firing, keeping its record. ``False`` if unknown/already paused."""
+        from lazypulse.schedules import pause_schedule
+
+        assert self.store is not None
+        return pause_schedule(self.store, name)
+
+    def resume_schedule(self, name: str) -> bool:
+        """Let a paused schedule fire again. ``False`` if unknown/already active."""
+        from lazypulse.schedules import resume_schedule
+
+        assert self.store is not None
+        return resume_schedule(self.store, name)
+
+    def remove_schedule(self, name: str) -> bool:
+        """Delete a schedule. ``False`` if it did not exist.
+
+        A calendar-managed entry returns on the next sync; retire it in code."""
+        from lazypulse.schedules import remove_schedule
+
+        assert self.store is not None
+        return remove_schedule(self.store, name)
 
     # ------------------------------------------------------------------ #
     # The tick
@@ -386,7 +484,7 @@ class PulseAgent(Agent):
         """Execute a single beat. Exposed for deterministic testing.
 
         Order matters: recover crashed tasks first, prune old terminal records,
-        then process cron jobs and due retries, then intake new inbound (which
+        then fire due schedules and due retries, then intake new inbound (which
         may become due immediately), then run everything due.
 
         ``await_due`` controls how due tasks are executed. ``True`` (default)
@@ -402,7 +500,7 @@ class PulseAgent(Agent):
 
         self._recover_stale(now, report)
         self._prune_terminal(now, report)
-        self._process_cron(now)
+        self._process_schedules(now, report)
         self._reschedule_due_retries(now, report)
 
         for msg in await self._drain_adapters():
@@ -442,7 +540,17 @@ class PulseAgent(Agent):
 
         # Only emit when something happened — a quiet tick every ``tick_seconds``
         # would otherwise flood the Session of a long-running agent.
-        if report.drained or report.due or report.recovered or report.pruned or report.completed or report.failed:
+        # A skipped occurrence produces no due task, so it needs its own term
+        # here or a schedule-only agent would pass over a slot in silence.
+        if (
+            report.drained
+            or report.due
+            or report.recovered
+            or report.pruned
+            or report.completed
+            or report.failed
+            or report.missed
+        ):
             self._emit("pulse.tick", report.model_dump(mode="json"))
         return report
 
@@ -837,47 +945,189 @@ class PulseAgent(Agent):
             )
             self.store.compare_and_swap(key, raw, rescheduled.model_dump(mode="json"))
 
-    def _process_cron(self, now: datetime) -> None:
-        """Fire any cron jobs whose ``next_fire_at`` has passed.
+    def _process_schedules(self, now: datetime, report: TickReport) -> None:
+        """Fire every recurring schedule that has a due occurrence.
 
-        The cron record is atomically advanced (CAS) *before* scheduling the
-        task so two agents sharing the same Store never produce duplicate task
-        instances for the same cron occurrence — only the process that wins
-        the CAS calls ``schedule()``.
+        One occurrence is *claimed* by a compare-and-swap on the schedule
+        record before its task is written, so two agents sharing a Store never
+        both fire the same slot — only the CAS winner calls ``schedule()``.
+        Deliberate non-firings (misfire grace exceeded, non-business day,
+        previous run still live) advance the record exactly the same way, so a
+        skipped occurrence is passed over once and never retried.
         """
         if self.store is None:
             return
-        # Use the shared scanner: it probes ``items(prefix=)`` and degrades to a
+        # The shared scanner probes ``items(prefix=)`` and degrades to a
         # ``keys()`` walk when the store's ``items()`` predates the ``prefix=``
-        # keyword. The old hand-rolled ``hasattr(store, "items")`` check called
-        # ``items(prefix=...)`` unconditionally, which raised ``TypeError`` every
-        # tick on such a store — swallowed as ``pulse.tick_error`` and aborting
-        # the rest of the tick (intake + due execution skipped).
-        from lazypulse.tasks import _iter_records
+        # keyword, rather than raising ``TypeError`` every tick (which would be
+        # swallowed as ``pulse.tick_error``, aborting the rest of the tick).
+        from lazypulse.schedules import After, Cron, ScheduleRecord, _iter_schedule_records
 
-        cron_items = _iter_records(self.store, store_keys.CRON_PREFIX)
-        for key, raw in cron_items:
+        for key, raw in _iter_schedule_records(self.store):
             if not isinstance(raw, dict):
                 continue
-            next_fire_at = _parse_dt(raw.get("next_fire_at"))
-            if next_fire_at is None or next_fire_at > now:
+            try:
+                record = ScheduleRecord.model_validate(raw)
+            except Exception as exc:
+                # A corrupt record can never fire; surface it instead of
+                # silently skipping it forever.
+                self._emit("pulse.schedule_error", {"schedule_key": key, "error": f"{type(exc).__name__}: {exc}"})
+                continue
+            if record.paused or not record.spec.enabled:
                 continue
             try:
-                from lazypulse.cron import CronTrigger
-
-                trigger = CronTrigger(raw["expr"], raw.get("tz", "UTC"))
-                next_dt = trigger.next(now)
-                updated = {**raw, "next_fire_at": next_dt.isoformat()}
+                if isinstance(record.spec, Cron):
+                    self._fire_cron(key, raw, record, now, report)
+                elif isinstance(record.spec, After):
+                    self._fire_after(key, raw, record, now, report)
             except Exception as exc:
-                # A corrupt cron record (bad expr/tz) can never fire; surface
-                # it instead of skipping silently forever.
-                self._emit("pulse.cron_error", {"cron_key": key, "error": f"{type(exc).__name__}: {exc}"})
-                continue
-            # Claim this firing by advancing next_fire_at atomically.
-            # If the CAS fails another agent process already owns it — skip.
-            if not self.store.compare_and_swap(key, raw, updated):
-                continue
-            self.schedule(raw.get("text", ""), run_at=now)
+                # A bad cron expression or unknown timezone must not abort the
+                # remaining schedules, let alone the rest of the tick.
+                self._emit("pulse.schedule_error", {"schedule": record.name, "error": f"{type(exc).__name__}: {exc}"})
+
+    def _previous_run_status(self, last_task_id: str | None) -> str | None:
+        """Status of the task this schedule produced last time, if still on file."""
+        if last_task_id is None or self.store is None:
+            return None
+        raw = self.store.read(store_keys.task_key(last_task_id))
+        if not isinstance(raw, dict):
+            return None  # pruned by retention — treat as finished
+        status = raw.get("status")
+        return str(status) if status else None
+
+    def _fire_cron(
+        self, key: str, raw: dict[str, Any], record: ScheduleRecord, now: datetime, report: TickReport
+    ) -> None:
+        from lazypulse.schedules import _LIVE_STATUSES, Cron
+
+        spec = record.spec
+        assert isinstance(spec, Cron)
+        slot = record.next_fire_at
+        if slot is None:
+            # No fire time on file (hand-written record): set one and wait.
+            self.store.compare_and_swap(  # type: ignore[union-attr]
+                key, raw, {**raw, "next_fire_at": spec.next_after(now).isoformat()}
+            )
+            return
+        if slot > now:
+            return
+
+        # Coalesce: the next fire time is always computed forward from *now*, so
+        # an outage yields one occurrence rather than a replayed backlog.
+        next_fire_at = spec.next_after(now)
+        prev_status = self._previous_run_status(record.last_task_id)
+
+        skip_reason: str | None = None
+        if spec.on_days is not None and not spec.on_days.allows(spec.local_date(slot)):
+            skip_reason = "non_business_day"
+        elif spec.misfire_grace is not None and (now - slot) > spec.misfire_grace:
+            # The slot is stale: running a 15:45 market job at 23:00 is worse
+            # than not running it at all.
+            skip_reason = "misfire_grace_exceeded"
+        elif spec.overlap == "skip" and prev_status in _LIVE_STATUSES:
+            skip_reason = "overlap"
+
+        self._commit_occurrence(
+            key, raw, record, now, report, skip_reason=skip_reason, next_fire_at=next_fire_at, prev_status=prev_status
+        )
+
+    def _fire_after(
+        self, key: str, raw: dict[str, Any], record: ScheduleRecord, now: datetime, report: TickReport
+    ) -> None:
+        from lazypulse.schedules import _LIVE_STATUSES, After, get_schedule
+
+        spec = record.spec
+        assert isinstance(spec, After)
+        assert self.store is not None
+        predecessor = get_schedule(self.store, spec.after)
+        if predecessor is None or predecessor.last_task_id is None:
+            return  # the predecessor has never run
+        trigger_task_id = predecessor.last_task_id
+        if trigger_task_id == record.last_trigger_task_id:
+            return  # already reacted to that run
+        task_raw = self.store.read(store_keys.task_key(trigger_task_id))
+        if not isinstance(task_raw, dict) or task_raw.get("status") != "completed":
+            # Still in flight, or it failed. Either way there is nothing to
+            # follow up on yet, and a retry may still complete it — so don't
+            # consume the trigger.
+            return
+        completed_at = _parse_dt(task_raw.get("completed_at"))
+        if completed_at is None:
+            return
+        prev_status = self._previous_run_status(record.last_task_id)
+
+        skip_reason: str | None = None
+        if (now - completed_at) > spec.within:
+            # The predecessor finished too long ago to still be acting on.
+            skip_reason = "within_window_elapsed"
+        elif spec.overlap == "skip" and prev_status in _LIVE_STATUSES:
+            skip_reason = "overlap"
+
+        self._commit_occurrence(
+            key,
+            raw,
+            record,
+            now,
+            report,
+            skip_reason=skip_reason,
+            next_fire_at=None,
+            prev_status=prev_status,
+            trigger_task_id=trigger_task_id,
+        )
+
+    def _commit_occurrence(
+        self,
+        key: str,
+        raw: dict[str, Any],
+        record: ScheduleRecord,
+        now: datetime,
+        report: TickReport,
+        *,
+        skip_reason: str | None,
+        next_fire_at: datetime | None,
+        prev_status: str | None,
+        trigger_task_id: str | None = None,
+    ) -> None:
+        """Claim one occurrence, then schedule its task if it was not skipped.
+
+        The task id is generated up front so the schedule→task link is written
+        in the *same* CAS that claims the occurrence. Claiming first is what
+        makes double-firing impossible across processes; recording the link is
+        what makes the overlap check possible on the next occurrence."""
+        assert self.store is not None
+        # Fold in the previous run's outcome — the only point at which a
+        # completed schedule task is observed.
+        failures = record.consecutive_failures
+        if prev_status == "failed":
+            failures += 1
+        elif prev_status == "completed":
+            failures = 0
+
+        update: dict[str, Any] = {"next_fire_at": next_fire_at, "consecutive_failures": failures}
+        if trigger_task_id is not None:
+            update["last_trigger_task_id"] = trigger_task_id
+        task_id: str | None = None
+        if skip_reason is None:
+            task_id = str(uuid.uuid4())
+            update.update(
+                {"last_fire_at": now, "last_task_id": task_id, "fire_count": record.fire_count + 1}
+            )
+        else:
+            update["missed_count"] = record.missed_count + 1
+
+        if not self.store.compare_and_swap(key, raw, record.model_copy(update=update).model_dump(mode="json")):
+            return  # another agent owns this occurrence
+
+        if skip_reason is not None:
+            report.missed += 1
+            self._emit(
+                "pulse.schedule_missed",
+                {"schedule": record.name, "reason": skip_reason, "at": now.isoformat()},
+            )
+            return
+        self.schedule(record.spec.text, run_at=now, action=record.spec.action, task_id=task_id)
+        report.fired += 1
+        self._emit("pulse.schedule_fired", {"schedule": record.name, "task_id": task_id, "at": now.isoformat()})
 
     def _check_rate_limit(self, rate_key: str, max_count: int) -> bool:
         """CAS-increment the rate counter. Returns ``True`` if limit exceeded."""

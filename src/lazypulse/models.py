@@ -146,6 +146,10 @@ class TickReport(BaseModel):
     at: datetime
     drained: int = 0
     duplicates: int = 0
+    #: Recurring schedules that fired this tick, and occurrences deliberately
+    #: passed over (misfire grace exceeded, non-business day, overlap).
+    fired: int = 0
+    missed: int = 0
     scheduled: int = 0
     queued_for_review: int = 0
     rejected: int = 0

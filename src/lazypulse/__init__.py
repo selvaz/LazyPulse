@@ -42,6 +42,7 @@ from typing import TYPE_CHECKING, Any
 
 from lazypulse import store_keys
 from lazypulse.adapters.base import Adapter
+from lazypulse.calendar_tools import CalendarTools
 from lazypulse.models import (
     ActionClass,
     Identity,
@@ -56,6 +57,14 @@ from lazypulse.pulse_agent import PulseAgent
 from lazypulse.ratelimit import RateLimit
 from lazypulse.retry import RetryPolicy
 from lazypulse.review import StoreReviewerUI, pending_reviews, respond
+from lazypulse.schedules import (
+    After,
+    BusinessDays,
+    Calendar,
+    Cron,
+    ScheduleEntry,
+    ScheduleRecord,
+)
 from lazypulse.tasks import approve_task, pending_tasks, purge_terminal_tasks, reject_task
 
 # Single-source the version from installed distribution metadata so
@@ -157,6 +166,14 @@ __all__ = [
     "RetryPolicy",
     "CronTrigger",
     "RateLimit",
+    # Calendar (recurring schedules)
+    "Calendar",
+    "Cron",
+    "After",
+    "BusinessDays",
+    "ScheduleEntry",
+    "ScheduleRecord",
+    "CalendarTools",
     # Adapters
     "Adapter",
     "WebhookAdapter",

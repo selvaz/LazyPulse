@@ -120,7 +120,7 @@ def test_scan_records_uses_items_prefix() -> None:
     # Write 3 tasks + noise
     for i in range(3):
         agent.schedule(f"task {i}")
-    store.write("pulse:cron:abc", {"expr": "* * * * *"})
+    store.write("pulse:schedule:abc", {"spec": {"kind": "cron", "expr": "* * * * *"}})
     store.write("pulse:event:xyz", {"task_id": "t1"})
 
     records = agent._scan_records()

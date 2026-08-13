@@ -76,16 +76,16 @@ class _ItemsRejectsPrefix:
 
 
 def test_iter_records_falls_back_when_items_rejects_prefix() -> None:
-    store = _ItemsRejectsPrefix({"pulse:cron:1": {"a": 1}, "pulse:task:x": {"b": 2}, "other": {"c": 3}})
-    out = _iter_records(store, store_keys.CRON_PREFIX)
-    assert [k for k, _ in out] == ["pulse:cron:1"]
+    store = _ItemsRejectsPrefix({"pulse:schedule:s1": {"a": 1}, "pulse:task:x": {"b": 2}, "other": {"c": 3}})
+    out = _iter_records(store, store_keys.SCHEDULE_PREFIX)
+    assert [k for k, _ in out] == ["pulse:schedule:s1"]
 
 
 async def test_cron_fires_and_does_not_abort_tick() -> None:
     clock = FakeClock()
     store = Store()  # lazybridge Store here has no items() at all → keys() fallback
     pulse = PulseAgent(name="p", engine=MockEngine(["ok"]), store=store, clock=clock)
-    pulse.schedule_cron("recurring", "* * * * *")  # every minute
+    pulse.schedule_cron("recurring", "recurring", "* * * * *")  # every minute
     clock.advance(61)
     report = await pulse.tick_once()
     assert report.completed >= 1  # cron fired, task ran — the tick did not abort

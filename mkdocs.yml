@@ -50,6 +50,7 @@ plugins:
         Guides:
           - telegram.md
           - gmail.md
+          - scheduling.md
           - architecture.md
           - plan_engine.md
           - security.md
@@ -87,6 +88,7 @@ nav:
   - Home: index.md
   - Telegram (recommended): telegram.md
   - Gmail (push & polling): gmail.md
+  - Scheduling (calendar): scheduling.md
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md
   - Security: security.md

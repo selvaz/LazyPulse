@@ -246,7 +246,7 @@ plus these:
 | `unsafe_allow_all=` | `False` | Opt out of requiring a policy — runs all inbound with full trust. Local dev only. |
 | `tick_seconds=` | `1.0` | How often the loop wakes up. |
 | `max_concurrent_inbound=` | `4` | Cap on tasks running at once. |
-| `retry_policy=` | `None` | `RetryPolicy(...)` — auto-retry failed tasks with exponential backoff. Configurable `max_attempts`, `backoff_base`, `backoff_max`, and a `retry_on` exception filter (see **Retries and cron** below). |
+| `retry_policy=` | `None` | `RetryPolicy(...)` — auto-retry failed tasks with exponential backoff. Configurable `max_attempts`, `backoff_base`, `backoff_max`, and a `retry_on` exception filter (see **Retries** below). |
 | `stale_after=` | `max(tick*60, 3600)` | A `running` task older than this is treated as crashed and retried. Default is 1 h so slow LLM workers and tasks parked in human review (default review timeout 3600 s) are never falsely recovered. Tune down for fast pure-LLM agents. |
 | `terminal_retention=` | `None` | When set (seconds), terminal task records (`completed`/`rejected`/`failed`) older than this are pruned during ticks so an always-on agent's Store does not grow without bound. `None` keeps the full ledger forever. **Set this in production** (see below). |
 | `clock=` | UTC now | Inject a clock for deterministic tests. |
@@ -279,19 +279,42 @@ bypass the policy (your own code is trusted) and run on the next tick where
 pulse.schedule("post the daily standup summary")            # now
 pulse.schedule_after("retry the export", seconds=300)       # in 5 min
 pulse.schedule_at("send the weekly report", when=monday_9am)
-pulse.schedule_cron("send the weekly report", "0 9 * * 1")  # every Mon 09:00
 ```
 
-`schedule_cron(text, cron, tz="UTC")` registers a **recurring** task from a
-5-field cron expression and returns a `cron_id`; the tick loop fires it on
-schedule and advances the next fire time atomically. It needs the `cron` extra
-(`pip install "lazypulse[cron] @ git+https://github.com/selvaz/LazyPulse.git"`). The other three `schedule_*` calls are
-one-shots.
+These are one-shots. For **recurring** work, declare a `Calendar` — see
+[Scheduling](https://pulse.lazybridge.com/scheduling/) for the full guide:
+
+```python
+from lazypulse import After, BusinessDays, Calendar, Cron
+
+calendar = Calendar([
+    Cron("daily_stats", "run the daily stats and send the digest",
+         "45 15 * * MON-FRI", tz="Europe/Rome",
+         on_days=BusinessDays(holidays=[...]),      # skip market holidays
+         misfire_grace=timedelta(minutes=45)),      # don't fire it late
+    After("anomaly_check", "investigate today's anomalies",
+          after="daily_stats", within=timedelta(hours=2)),
+])
+
+pulse = PulseAgent(..., calendar=calendar)
+```
+
+Entries are keyed by **name**, so re-registering the calendar on every restart
+updates them in place instead of accumulating duplicates. A slot the agent was
+down for is skipped rather than fired hours late, missed slots coalesce into one
+firing, and `overlap="skip"` (default) won't stack a run on one still in flight.
+`After` waits for its predecessor to *complete*, so a dependent job never reads
+output that isn't there yet. Needs the `cron` extra.
+
+Operate it with `pulse.list_schedules()`, `pause_schedule()`, `resume_schedule()`
+and `remove_schedule()`, or hand the agent `CalendarTools(store).tools()` and let
+it manage its own timetable — guardrailed so it can pause code-declared entries
+but not rewrite them, and can't schedule itself into a loop.
 
 A `schedule`-only agent (no adapters) needs no policy. Combine with a small
 `tick_seconds` for reactive work, or a large one for cron-like jobs.
 
-### Retries and cron — the resilient side
+### Retries — the resilient side
 
 Tasks fail — an LLM call times out, a tool 500s. Pass a `RetryPolicy` to retry
 them automatically with exponential backoff instead of marking them `failed` on

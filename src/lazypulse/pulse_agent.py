@@ -246,7 +246,17 @@ class PulseAgent(Agent):
         loop, thread = self._loop, self._thread
         if loop is None or thread is None:
             return
-        loop.call_soon_threadsafe(loop.stop)
+        try:
+            loop.call_soon_threadsafe(loop.stop)
+        except RuntimeError:
+            # The loop has already finished closing. This is reachable exactly
+            # because a stop() that timed out leaves ``_loop`` set on purpose
+            # (see below): once the wedged worker frees up, the loop thread
+            # exits and closes the loop, so the retry that the retained state
+            # exists to allow would otherwise raise "Event loop is closed"
+            # instead of cleaning up. There is nothing left to signal — fall
+            # through to the join and the bookkeeping.
+            pass
         thread.join(timeout=10.0)
         if thread.is_alive():
             # A worker is wedged (e.g. blocking sync work on the loop thread).

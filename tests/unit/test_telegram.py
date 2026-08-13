@@ -489,11 +489,20 @@ async def test_failed_send_rollback_never_erases_newer_claim() -> None:
     # than the send timeout), a newer reply can legitimately claim meanwhile.
     # The rollback must be a CAS on OUR claim so it never erases that newer
     # claim and reopens the window.
-    from datetime import UTC, datetime
+    from datetime import UTC, datetime, timedelta
 
     import pytest
 
-    newer_claim = {"at": datetime.now(UTC).isoformat()}
+    # The offset is load-bearing, not decoration. A claim built from a bare
+    # ``datetime.now(UTC)`` here can serialise to the *same* ISO string as the
+    # one ``_claim_reply_window`` writes microseconds later, because Windows'
+    # clock granularity is coarser than the gap between the two calls. The two
+    # dicts then compare equal, the rollback CAS matches what it was meant to
+    # protect, and this test fails intermittently. A genuinely newer claim is
+    # always at least ``reply_min_interval_seconds`` later — the window check
+    # throttles anything sooner — so dating it forward is also what the
+    # scenario actually describes.
+    newer_claim = {"at": (datetime.now(UTC) + timedelta(seconds=30)).isoformat()}
 
     class SlowFailService(FakeService):
         def __init__(self, store: Store) -> None:

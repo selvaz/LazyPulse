@@ -22,7 +22,9 @@ def _msg(mid: str = "1", text: str = "hello") -> InboundMessage:
 
 
 def _only_record(store: Store) -> PulseRecord:
-    recs = [PulseRecord.model_validate(store.read(k)) for k in list(store.keys()) if k.startswith(store_keys.TASK_PREFIX)]
+    recs = [
+        PulseRecord.model_validate(store.read(k)) for k in list(store.keys()) if k.startswith(store_keys.TASK_PREFIX)
+    ]
     assert len(recs) == 1, f"expected one task record, got {len(recs)}"
     return recs[0]
 
@@ -155,7 +157,12 @@ def test_stop_warns_when_thread_wedged() -> None:
         assert pulse._loop is not None
         assert pulse._thread is not None
     finally:
-        # Real cleanup: restore the genuine thread and stop it for real.
+        # Real cleanup: restore the genuine thread and stop it for real. This
+        # retry is the whole point of leaving the state intact above, and it
+        # races the loop thread's own shutdown: the first stop() did signal the
+        # real loop, so by now it may already be closed. stop() has to absorb
+        # that rather than raise "Event loop is closed".
+        time.sleep(0.2)  # give the loop thread time to finish closing
         pulse._thread = real_thread
         pulse.stop()
     assert not pulse.is_running()
@@ -260,7 +267,9 @@ async def test_requested_action_propagates_to_record() -> None:
     msg = InboundMessage(
         source="mock", message_id="x", received_at=_now(), text="rm -rf", requested_action="destructive"
     )
-    pulse = PulseAgent(name="pulse", engine=MockEngine(), store=store, adapters=[MockAdapter([msg])], unsafe_allow_all=True)
+    pulse = PulseAgent(
+        name="pulse", engine=MockEngine(), store=store, adapters=[MockAdapter([msg])], unsafe_allow_all=True
+    )
     await pulse.tick_once()
     rec = _only_record(store)
     assert rec.action_class.value == "destructive"

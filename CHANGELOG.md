@@ -7,7 +7,69 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`Calendar`** — a declarative timetable of recurring work, written in Python
+  and reconciled against the Store when the agent starts. See
+  `docs/scheduling.md` and `examples/09_calendar_scheduler.py`.
+  - `Cron(name, text, expr, tz=, action=, misfire_grace=, on_days=, overlap=)`
+    fires on a cron expression; `After(name, text, after=, within=)` fires when
+    another entry's task **completes**, so a dependent job never analyses its
+    predecessor's stale output because a fixed clock offset guessed wrong.
+  - `misfire_grace` skips a slot the agent was down for instead of firing it
+    arbitrarily late; `on_days=BusinessDays(holidays=[...])` skips weekends and
+    holidays, evaluated in the entry's own timezone; `overlap="skip"` (default)
+    will not stack a run on one still in flight. Missed slots always coalesce
+    into at most one firing.
+  - Schedule state carries `fire_count`, `missed_count`,
+    `consecutive_failures`, `last_fire_at` and `last_task_id`; new Session
+    events `pulse.schedule_fired` / `pulse.schedule_missed` /
+    `pulse.schedule_error`; `TickReport` gains `fired` and `missed`.
+  - Managed via `PulseAgent.list_schedules()`, `get_schedule()`,
+    `pause_schedule()`, `resume_schedule()`, `remove_schedule()` and
+    `add_schedule()`.
+- **`CalendarTools`** — the calendar as a tool set, so the agent can read and
+  update its own timetable during a run (`calendar_list`, `calendar_add_cron`,
+  `calendar_add_after`, `calendar_update`, `calendar_pause`, `calendar_resume`,
+  `calendar_remove`). Guardrailed: entries declared in a `Calendar` can be
+  paused and resumed but not rewritten or deleted; entries the agent creates
+  are its own, are never pruned by a sync, and count against
+  `max_agent_schedules`; a cron firing more often than `min_interval_seconds`
+  (default 300) is refused. `writable=False` exposes only `calendar_list`.
+
+### Fixed
+Four defects in the scheduler, found in review of PR #43 and each covered by a
+test that fails without its fix:
+- **Declaring a name the agent created now takes ownership of it.** `sync`
+  adopted the spec and marked the record managed but left `created_by="agent"`,
+  so `CalendarTools` went on letting the model update or delete what had become
+  a code-declared schedule — a hole in the exact boundary it enforces.
+- **A paused cron now keeps its fire time advancing.** Held entries were skipped
+  outright, leaving `next_fire_at` stale; resuming then fired that stale
+  occurrence on the very next tick whenever `misfire_grace` was unset, which is
+  the opposite of what pause/resume documents. Those slots are not counted as
+  `missed` — pausing is deliberate.
+- **Schedules are evaluated before the prune pass.** With a `terminal_retention`
+  shorter than an `After.within` window (or after downtime longer than
+  retention), pruning ran first and deleted the completed predecessor task that
+  the dependent needed to read, so the follow-up neither ran nor recorded a
+  missed occurrence.
+- **One failed run is counted once.** `consecutive_failures` was folded in on
+  skipped occurrences too, so each passed-over slot re-observed the same failed
+  task — a single Friday failure reading as three consecutive ones after a
+  weekend of day-filtered skips, in the counter whose whole job is to make a
+  quietly broken schedule visible.
+
 ### Changed
+- **Breaking — `schedule_cron` now takes a `name` first**:
+  `schedule_cron(name, text, expr, *, tz=...)`, returning the name rather than a
+  generated id. Recurring entries are keyed by name (`pulse:schedule:{name}`,
+  replacing `pulse:cron:{cron_id}`), so re-registering the same schedule updates
+  it in place. Previously each call minted a fresh uuid, and an agent that
+  registered its jobs at startup accumulated one duplicate per process restart —
+  and fired the same job once per duplicate.
+- Recurring entries now carry an `action=` ActionClass, so a scheduled job that
+  sends Telegram or email is recorded as `EXTERNAL_SEND` in the ledger instead
+  of defaulting to `READ_PUBLIC`.
 - `gmail`/`outlook`/`telegram`/`dev` extras' `lazytoolkit` pin bumped from
   `v0.3.2` (75 commits stale) to `v0.5.0`.
 

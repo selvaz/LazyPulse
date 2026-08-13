@@ -52,8 +52,8 @@ def test_schedule_cron_fires_on_tick() -> None:
         clock=clock,
         unsafe_allow_all=True,
     )
-    cron_id = agent.schedule_cron("tick message", "* * * * *")
-    assert cron_id
+    name = agent.schedule_cron("every-minute", "tick message", "* * * * *")
+    assert name == "every-minute"
 
     # Advance 65 s so the first-minute mark (00:01:00) has passed
     clock.advance(65)

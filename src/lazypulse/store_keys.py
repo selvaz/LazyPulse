@@ -51,9 +51,11 @@ TASK_PREFIX = "pulse:task:"
 #: Prefix used to enumerate pending review requests (derived from REVIEW_REQ).
 REVIEW_REQ_PREFIX = "pulse:review:req:"
 
-#: Recurring cron job records.
-CRON = "pulse:cron:{cron_id}"
-CRON_PREFIX = "pulse:cron:"
+#: Recurring schedule records, keyed by the schedule's **name** rather than a
+#: generated id: the name is the identity, so re-registering a calendar updates
+#: the entry in place instead of accumulating a duplicate per process restart.
+SCHEDULE = "pulse:schedule:{name}"
+SCHEDULE_PREFIX = "pulse:schedule:"
 
 #: Per-sender rate-limit counter (window-bucketed).
 RATE_KEY = "pulse:rate:{sender}:{window_bucket}"
@@ -66,6 +68,10 @@ def task_key(task_id: str) -> str:
 
 def event_key(event_id: str) -> str:
     return EVENT.format(event_id=event_id)
+
+
+def schedule_key(name: str) -> str:
+    return SCHEDULE.format(name=name)
 
 
 def tg_reply_throttle_key(bot: str, chat: str) -> str:

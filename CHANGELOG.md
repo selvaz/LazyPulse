@@ -36,6 +36,29 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
   `max_agent_schedules`; a cron firing more often than `min_interval_seconds`
   (default 300) is refused. `writable=False` exposes only `calendar_list`.
 
+### Fixed
+Four defects in the scheduler, found in review of PR #43 and each covered by a
+test that fails without its fix:
+- **Declaring a name the agent created now takes ownership of it.** `sync`
+  adopted the spec and marked the record managed but left `created_by="agent"`,
+  so `CalendarTools` went on letting the model update or delete what had become
+  a code-declared schedule — a hole in the exact boundary it enforces.
+- **A paused cron now keeps its fire time advancing.** Held entries were skipped
+  outright, leaving `next_fire_at` stale; resuming then fired that stale
+  occurrence on the very next tick whenever `misfire_grace` was unset, which is
+  the opposite of what pause/resume documents. Those slots are not counted as
+  `missed` — pausing is deliberate.
+- **Schedules are evaluated before the prune pass.** With a `terminal_retention`
+  shorter than an `After.within` window (or after downtime longer than
+  retention), pruning ran first and deleted the completed predecessor task that
+  the dependent needed to read, so the follow-up neither ran nor recorded a
+  missed occurrence.
+- **One failed run is counted once.** `consecutive_failures` was folded in on
+  skipped occurrences too, so each passed-over slot re-observed the same failed
+  task — a single Friday failure reading as three consecutive ones after a
+  weekend of day-filtered skips, in the counter whose whole job is to make a
+  quietly broken schedule visible.
+
 ### Changed
 - **Breaking — `schedule_cron` now takes a `name` first**:
   `schedule_cron(name, text, expr, *, tz=...)`, returning the name rather than a

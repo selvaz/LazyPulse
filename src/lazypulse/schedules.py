@@ -294,7 +294,13 @@ class Calendar:
                     next_fire_at = entry.next_after(now)
             else:
                 next_fire_at = None
-            updated = existing.model_copy(update={"spec": entry, "managed": True, "next_fire_at": next_fire_at})
+            # ``created_by`` is cleared: declaring a name in code *takes* it.
+            # Leaving it as "agent" would keep CalendarTools' ownership check
+            # treating a now-code-declared entry as the model's own, letting it
+            # rewrite or delete exactly what the boundary exists to protect.
+            updated = existing.model_copy(
+                update={"spec": entry, "managed": True, "created_by": None, "next_fire_at": next_fire_at}
+            )
             new_raw = updated.model_dump(mode="json")
             if new_raw == raw:
                 result.unchanged.append(name)
@@ -353,8 +359,9 @@ def pause_schedule(store: Store, name: str) -> bool:
     """Stop a schedule from firing, keeping its record and counters.
 
     Returns ``False`` if it does not exist or was already paused. A paused cron
-    entry still has its fire time advanced past missed slots when resumed, so
-    resuming never replays a backlog.
+    entry keeps having its fire time advanced past slots that go by *while it is
+    held*, so resuming starts from the next real occurrence rather than firing a
+    stale one, and never replays a backlog.
     """
     return _set_paused(store, name, True)
 

@@ -114,9 +114,17 @@ pulse.resume_schedule("etf_daily_stats")
 pulse.remove_schedule("ad_hoc_job")       # declared entries return on next sync
 ```
 
+A paused entry is *held*, not stopped: its fire time keeps advancing past slots
+that go by while it is paused, so resuming starts from the next real occurrence
+instead of immediately firing a stale one. Those slots are not counted as
+`missed` either — pausing is deliberate, and inflating the counter would bury
+the occurrences that really were passed over.
+
 Each record carries `fire_count`, `missed_count`, `consecutive_failures`,
 `last_fire_at` and `last_task_id`, so a schedule that has been quietly failing
 for a week is visible rather than inferred from missing Telegram messages.
+`consecutive_failures` moves only when a run actually happens, so one failed run
+reads as one failure however many slots are skipped after it.
 
 Session events: `pulse.schedule_fired`, `pulse.schedule_missed` (with a `reason`
 of `misfire_grace_exceeded`, `non_business_day`, `overlap` or
@@ -165,6 +173,12 @@ worse than refusing, because the next `sync` would silently restore them and the
 agent's change would vanish without explanation. Pause and resume are allowed —
 that is the operationally useful half ("the upstream feed is down, hold the
 digest until I say otherwise").
+
+Ownership moves one way. Declaring in a `Calendar` a name the agent had already
+created **takes** that name: the entry becomes code-owned, and the agent can no
+longer update or remove it. Without that, a declaration would adopt the entry's
+spec while leaving it marked as the agent's, and the boundary would be open
+exactly where it is supposed to close.
 
 Two more guards apply to what the agent creates: a cron whose consecutive fire
 times are closer together than `min_interval_seconds` (default 300) is refused,

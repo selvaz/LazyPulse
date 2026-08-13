@@ -29,3 +29,6 @@ client_secret*.json
 .idea/
 .vscode/
 .DS_Store
+
+# mkdocs build output
+site/

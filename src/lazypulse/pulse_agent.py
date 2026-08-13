@@ -483,9 +483,10 @@ class PulseAgent(Agent):
     async def tick_once(self, *, await_due: bool = True) -> TickReport:
         """Execute a single beat. Exposed for deterministic testing.
 
-        Order matters: recover crashed tasks first, prune old terminal records,
-        then fire due schedules and due retries, then intake new inbound (which
-        may become due immediately), then run everything due.
+        Order matters: recover crashed tasks first, then fire due schedules
+        (before the prune pass can delete a record a dependent still needs to
+        read), then prune and reschedule due retries, then intake new inbound
+        (which may become due immediately), then run everything due.
 
         ``await_due`` controls how due tasks are executed. ``True`` (default)
         runs them inline and waits for completion — the right behaviour for the
@@ -499,8 +500,15 @@ class PulseAgent(Agent):
         report = TickReport(at=now)
 
         self._recover_stale(now, report)
-        self._prune_terminal(now, report)
+        # Schedules are evaluated *before* the prune pass: an ``After`` entry
+        # reads its predecessor's completed task record to decide whether to
+        # fire, and retention deletes exactly those records. With a
+        # ``terminal_retention`` shorter than the dependent's ``within`` window
+        # — or after downtime longer than retention — pruning first would erase
+        # the trigger before the dependent could see it, and the follow-up
+        # would neither run nor be recorded as missed.
         self._process_schedules(now, report)
+        self._prune_terminal(now, report)
         self._reschedule_due_retries(now, report)
 
         for msg in await self._drain_adapters():
@@ -974,6 +982,15 @@ class PulseAgent(Agent):
                 self._emit("pulse.schedule_error", {"schedule_key": key, "error": f"{type(exc).__name__}: {exc}"})
                 continue
             if record.paused or not record.spec.enabled:
+                # Held, not stopped: keep the fire time moving so the record
+                # always names a real future occurrence. Without this, resuming
+                # after the stored slot has passed fires that stale occurrence
+                # on the very next tick (whenever ``misfire_grace`` is unset),
+                # which is the opposite of what pause/resume promises. Not
+                # counted as missed — pausing is deliberate, and inflating
+                # ``missed_count`` would bury the occurrences that really were
+                # passed over.
+                self._advance_held_schedule(key, raw, record, now)
                 continue
             try:
                 if isinstance(record.spec, Cron):
@@ -984,6 +1001,29 @@ class PulseAgent(Agent):
                 # A bad cron expression or unknown timezone must not abort the
                 # remaining schedules, let alone the rest of the tick.
                 self._emit("pulse.schedule_error", {"schedule": record.name, "error": f"{type(exc).__name__}: {exc}"})
+
+    def _advance_held_schedule(
+        self, key: str, raw: dict[str, Any], record: ScheduleRecord, now: datetime
+    ) -> None:
+        """Move a paused/disabled cron past any slot that has already gone by.
+
+        ``After`` entries have no stored fire time, so there is nothing to
+        advance — they simply do not react while held."""
+        from lazypulse.schedules import Cron
+
+        spec = record.spec
+        if not isinstance(spec, Cron):
+            return
+        slot = record.next_fire_at
+        if slot is not None and slot > now:
+            return
+        try:
+            next_fire_at = spec.next_after(now)
+        except Exception as exc:
+            self._emit("pulse.schedule_error", {"schedule": record.name, "error": f"{type(exc).__name__}: {exc}"})
+            return
+        assert self.store is not None
+        self.store.compare_and_swap(key, raw, {**raw, "next_fire_at": next_fire_at.isoformat()})
 
     def _previous_run_status(self, last_task_id: str | None) -> str | None:
         """Status of the task this schedule produced last time, if still on file."""
@@ -1095,22 +1135,30 @@ class PulseAgent(Agent):
         makes double-firing impossible across processes; recording the link is
         what makes the overlap check possible on the next occurrence."""
         assert self.store is not None
-        # Fold in the previous run's outcome — the only point at which a
-        # completed schedule task is observed.
-        failures = record.consecutive_failures
-        if prev_status == "failed":
-            failures += 1
-        elif prev_status == "completed":
-            failures = 0
-
-        update: dict[str, Any] = {"next_fire_at": next_fire_at, "consecutive_failures": failures}
+        update: dict[str, Any] = {"next_fire_at": next_fire_at}
         if trigger_task_id is not None:
             update["last_trigger_task_id"] = trigger_task_id
         task_id: str | None = None
         if skip_reason is None:
+            # Fold in the previous run's outcome. Only on a firing: ``last_task_id``
+            # changes exactly once per fire, so each finished run is counted once.
+            # Doing it on skips too would re-observe the *same* failed task on every
+            # passed-over slot — a single Friday failure reading as three consecutive
+            # ones after a weekend of day-filtered skips, in the very counter that
+            # exists to make a quietly broken schedule visible.
+            failures = record.consecutive_failures
+            if prev_status == "failed":
+                failures += 1
+            elif prev_status == "completed":
+                failures = 0
             task_id = str(uuid.uuid4())
             update.update(
-                {"last_fire_at": now, "last_task_id": task_id, "fire_count": record.fire_count + 1}
+                {
+                    "last_fire_at": now,
+                    "last_task_id": task_id,
+                    "fire_count": record.fire_count + 1,
+                    "consecutive_failures": failures,
+                }
             )
         else:
             update["missed_count"] = record.missed_count + 1

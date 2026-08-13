@@ -145,6 +145,108 @@ def test_paused_schedule_does_not_fire_and_resumes_cleanly() -> None:
     assert agent.tick().fired == 1
 
 
+def test_resuming_does_not_fire_the_slot_that_passed_while_paused() -> None:
+    """A held schedule keeps its fire time moving, so resume starts fresh."""
+    clock = FakeClock(start=_START)
+    agent = _agent(clock, calendar=Calendar([Cron("hourly", "t", "0 * * * *")]))
+
+    agent.pause_schedule("hourly")
+    clock.advance(3 * 3600)  # three slots go by while held
+    assert agent.tick().fired == 0
+    held = agent.get_schedule("hourly")
+    assert held is not None
+    assert held.next_fire_at is not None
+    assert held.next_fire_at > clock.now  # advanced past them, not left stale
+    assert held.missed_count == 0  # pausing is deliberate, not a missed slot
+
+    agent.resume_schedule("hourly")
+    # The very next tick must not fire: there is no stale occurrence left over.
+    assert agent.tick().fired == 0
+    clock.advance(3600)
+    assert agent.tick().fired == 1
+
+
+def test_declaring_a_name_the_agent_created_takes_ownership() -> None:
+    """A Calendar declaration claims the name; the agent may no longer rewrite it."""
+    clock = FakeClock(start=_START)
+    store = Store()
+    agent = _agent(clock, store=store)
+    agent.schedule_cron("shared_name", "creata dall'agente", "0 * * * *")
+    store.write(  # mark it agent-owned, as CalendarTools does
+        "pulse:schedule:shared_name",
+        {**store.read("pulse:schedule:shared_name"), "created_by": "agent"},
+    )
+
+    agent = _agent(clock, calendar=Calendar([Cron("shared_name", "dichiarata", "0 * * * *")]), store=store)
+
+    record = agent.get_schedule("shared_name")
+    assert record is not None
+    assert record.managed is True
+    assert record.created_by is None  # ownership moved to code
+    assert record.spec.text == "dichiarata"
+
+
+def test_a_single_failed_run_counts_once_across_skipped_slots() -> None:
+    """The failure counter must not re-observe the same failed task on skips."""
+    clock = FakeClock(start=datetime(2026, 1, 2, 8, 0, tzinfo=UTC))  # Friday
+    store = Store()
+    agent = _agent(
+        clock,
+        calendar=Calendar([Cron("daily", "t", "0 9 * * *", on_days=BusinessDays())]),
+        store=store,
+    )
+
+    clock.advance(3600)  # Fri 09:00 — fires
+    agent.tick()
+    record = agent.get_schedule("daily")
+    assert record is not None
+    task_key = f"pulse:task:{record.last_task_id}"
+    store.write(task_key, {**store.read(task_key), "status": "failed"})
+
+    clock.advance(24 * 3600)  # Sat — skipped
+    agent.tick()
+    clock.advance(24 * 3600)  # Sun — skipped
+    agent.tick()
+    after_skips = agent.get_schedule("daily")
+    assert after_skips is not None
+    assert after_skips.missed_count == 2
+    assert after_skips.consecutive_failures == 0  # not folded in yet — no run happened
+
+    clock.advance(24 * 3600)  # Mon — fires, and observes Friday's failure once
+    agent.tick()
+    monday = agent.get_schedule("daily")
+    assert monday is not None
+    assert monday.consecutive_failures == 1  # one failed run, counted once
+
+
+def test_after_still_fires_when_retention_is_shorter_than_its_window() -> None:
+    """Schedules are evaluated before the prune pass deletes their trigger."""
+    clock = FakeClock(start=_START)
+    agent = PulseAgent(
+        name="cal",
+        engine=MockEngine(["ok"]),
+        store=Store(),
+        clock=clock,
+        terminal_retention=1.0,  # retention far shorter than the 2h window
+        calendar=Calendar(
+            [
+                Cron("producer", "produce", "0 * * * *"),
+                After("consumer", "consume", after="producer", within=timedelta(hours=2)),
+            ]
+        ),
+        unsafe_allow_all=True,
+    )
+
+    clock.advance(3600)
+    assert agent.tick().fired == 1  # producer runs and completes
+    clock.advance(120)  # older than retention, still well inside `within`
+
+    assert agent.tick().fired == 1  # the dependent still saw its trigger
+    consumer = agent.get_schedule("consumer")
+    assert consumer is not None
+    assert consumer.fire_count == 1
+
+
 def test_remove_schedule() -> None:
     clock = FakeClock(start=_START)
     agent = _agent(clock)

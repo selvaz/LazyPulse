@@ -413,12 +413,13 @@ def _entry_from_toml(path: Path, name: str, body: dict[str, Any]) -> ScheduleEnt
             raise ValueError(f'{where}: \'overlap\' must be "skip" or "allow", got {body["overlap"]!r}.')
         common["overlap"] = body["overlap"]
     if "enabled" in body:
-        common["enabled"] = bool(body["enabled"])
+        common["enabled"] = _toml_bool(where, "enabled", body["enabled"])
 
     try:
         if is_cron:
             on_days = None
-            if body.get("business_days") or "holidays" in body:
+            business = "business_days" in body and _toml_bool(where, "business_days", body["business_days"])
+            if business or "holidays" in body:
                 on_days = BusinessDays(holidays=[_toml_date(where, d) for d in body.get("holidays", [])])
             grace = body.get("misfire_grace_minutes")
             return Cron(
@@ -431,6 +432,19 @@ def _entry_from_toml(path: Path, name: str, body: dict[str, Any]) -> ScheduleEnt
         return After(after=body["after"], within=timedelta(minutes=float(body.get("within_minutes", 120))), **common)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{where}: {exc}") from exc
+
+
+def _toml_bool(where: str, key: str, value: Any) -> bool:
+    """Require a real TOML boolean, never a truthy stand-in.
+
+    ``enabled = "false"`` is the common way to get this wrong, and ``bool()``
+    would turn that string into ``True`` — silently running a schedule the
+    operator wrote down as disabled. A loader that rejects unknown keys has no
+    business coercing this one.
+    """
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}: '{key}' must be true or false (unquoted), got {value!r}.")
+    return value
 
 
 def _toml_date(where: str, value: Any) -> date:

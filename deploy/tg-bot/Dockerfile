@@ -21,6 +21,8 @@ ENV STORE_DB=/data/pulse.db
 # e rileggere update vecchi al primo redeploy.
 ENV BOT_ID=tg-deepseek
 ENV AGENT_NAME=tg-deepseek
+# ADAPTER_NAME resta il default "telegram": e' cio' che i task gia' nello Store
+# hanno come `source`, e da cui dipende l'instradamento delle risposte.
 ENV PYTHONUNBUFFERED=1
 
 CMD ["python", "bot.py"]

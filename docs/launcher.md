@@ -59,6 +59,10 @@ within_minutes = 120
 | `overlap` | both | `skip` (default) or `allow` |
 | `enabled` | both | `false` to declare it without running it |
 
+Booleans must be real TOML booleans: `enabled = "false"` is rejected rather than
+coerced, because Python reads that string as *true* and would run a schedule you
+wrote down as off.
+
 An unknown key is an **error**, not a silent no-op: a typo'd `buisness_days`
 that quietly did nothing would let a market job run on Christmas. Validate
 before deploying:
@@ -80,7 +84,8 @@ reach you must say so in its `task` text. Without it the work runs, produces
 its answer, and delivers it nowhere.
 
 Set `NOTIFY_TOOL=0` to withhold the tool, and `OWNER_CHAT_ID` to send somewhere
-other than the owner's own chat.
+other than the owner's own chat — it redirects the approval requests too, so
+every unprompted message the launcher sends lands in the same place.
 
 ## Letting the agent manage its own timetable
 
@@ -100,7 +105,8 @@ can schedule itself.
 | `SYSTEM_PROMPT` | a concise-assistant prompt | system instructions |
 | `STORE_DB` | `pulse.db` | put it on a mounted volume in a container |
 | `BOT_ID` | `lazypulse` | Telegram watermark identity — see the warning below |
-| `AGENT_NAME` | `lazypulse` | agent and adapter name |
+| `AGENT_NAME` | `lazypulse` | agent name, used in logs |
+| `ADAPTER_NAME` | `telegram` | adapter name — see the warning below |
 | `TICK_SECONDS` | `3` | loop interval |
 | `MAX_CONCURRENT` | `4` | cap on tasks running at once — your spend ceiling |
 | `REPLY_MIN_INTERVAL` | `2` | per-chat auto-reply throttle |
@@ -114,11 +120,16 @@ can schedule itself.
 | `CALENDAR_MIN_INTERVAL` | `300` | floor on agent-created cadences, seconds |
 | `CALENDAR_MAX_SCHEDULES` | `20` | cap on agent-created schedules |
 
-!!! warning "`BOT_ID` is a stored identity, not a label"
-    It keys the Telegram update watermark (`pulse:telegram:offset:{bot}`).
-    Changing it on an existing deployment resets the offset, and the bot
-    re-reads updates it had already handled. An existing deployment must keep
-    the value it already uses.
+!!! warning "`BOT_ID` and `ADAPTER_NAME` are stored identities, not labels"
+    `BOT_ID` keys the Telegram update watermark (`pulse:telegram:offset:{bot}`):
+    change it on an existing deployment and the offset resets, so the bot
+    re-reads updates it had already handled.
+
+    `ADAPTER_NAME` is written onto every task as its `source`, and reply routing
+    looks it up by exact name. Change it and any task already in the Store
+    completes with nowhere to send its answer — silently, because a missing
+    responder is not an error. Both must keep whatever value the Store already
+    holds; `ADAPTER_NAME` defaults to `telegram` for exactly that reason.
 
 ## Extending it
 

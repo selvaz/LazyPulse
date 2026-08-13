@@ -152,6 +152,9 @@ def test_calendar_from_toml_round_trips_every_field(tmp_path: Path) -> None:
         ("[schedules.x]\ntask = 't'\ncron = '* * * * *'\noverlap = 'maybe'\n", 'must be "skip" or "allow"'),
         ("[schedules.x]\ntask = 't'\ncron = '* * * * *'\nholidays = ['not-a-date']\n", "not an ISO date"),
         ("[schedules.x]\ntask = 't'\nafter = 'ghost'\n", "does not declare"),
+        # bool("false") is True — a schedule written down as off must not run.
+        ("[schedules.x]\ntask = 't'\ncron = '* * * * *'\nenabled = 'false'\n", "must be true or false"),
+        ("[schedules.x]\ntask = 't'\ncron = '* * * * *'\nbusiness_days = 'yes'\n", "must be true or false"),
         ("[other]\nx = 1\n", "no [schedules] table"),
         ("this is not toml", "invalid TOML"),
     ],
@@ -175,6 +178,54 @@ def test_a_utf8_bom_does_not_break_the_calendar(tmp_path: Path) -> None:
 def test_a_missing_calendar_file_names_the_path(tmp_path: Path) -> None:
     with pytest.raises(FileNotFoundError, match="Calendar file not found"):
         Calendar.from_toml(tmp_path / "nope.toml")
+
+
+def test_a_real_toml_false_still_disables(tmp_path: Path) -> None:
+    body = "[schedules.x]\ntask = 't'\ncron = '0 * * * *'\nenabled = false\nbusiness_days = false\n"
+    entry = next(iter(Calendar.from_toml(_write(tmp_path, body))))
+    assert entry.enabled is False
+    assert entry.on_days is None  # type: ignore[union-attr]
+
+
+# --- Migration hazards --------------------------------------------------- #
+
+
+def test_adapter_name_does_not_follow_agent_name(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Records written before this launcher hold source="telegram".
+
+    The adapter name is what ``_maybe_reply`` looks up, so tying it to
+    AGENT_NAME would leave tasks that were already in flight completing with
+    nowhere to send their answer."""
+    monkeypatch.setenv("BOT_TOKEN", "t")
+    monkeypatch.setenv("OWNER_ID", "42")
+    monkeypatch.setenv("AGENT_NAME", "tg-deepseek")
+    monkeypatch.delenv("ADAPTER_NAME", raising=False)
+    cfg = LauncherConfig.from_env()
+
+    assert cfg.agent_name == "tg-deepseek"
+    assert cfg.adapter_name == "telegram"  # TelegramInbox's own default, unchanged
+
+    monkeypatch.setenv("ADAPTER_NAME", "custom")
+    assert LauncherConfig.from_env().adapter_name == "custom"
+
+
+def test_owner_chat_id_defaults_to_the_owner_and_is_overridable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("BOT_TOKEN", "t")
+    monkeypatch.setenv("OWNER_ID", "42")
+    monkeypatch.delenv("OWNER_CHAT_ID", raising=False)
+    assert LauncherConfig.from_env().owner_chat_id == 42
+
+    monkeypatch.setenv("OWNER_CHAT_ID", "-1009999")  # a group chat
+    assert LauncherConfig.from_env().owner_chat_id == -1009999
+
+
+def test_the_deploy_image_installs_the_cron_extra() -> None:
+    """CALENDAR_FILE with a cron entry imports croniter during sync, so the
+    deployment that documents the calendar flow has to ship the extra."""
+    root = Path(__file__).resolve().parents[2]
+    requirements = (root / "deploy" / "tg-bot" / "requirements.txt").read_text(encoding="utf-8")
+    line = next(line for line in requirements.splitlines() if line.startswith("lazypulse["))
+    assert "cron" in line, line
 
 
 # --- CLI ----------------------------------------------------------------- #

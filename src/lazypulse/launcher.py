@@ -27,7 +27,10 @@ recovery, Store retention, and — when ``CALENDAR_FILE`` is set — a
 ``BOT_ID``                   Telegram watermark identity (default ``lazypulse``).
                              Changing it resets the update offset — an existing
                              deployment must keep the value it already uses.
-``AGENT_NAME``               agent + adapter name (default ``lazypulse``)
+``AGENT_NAME``               agent name, used in logs (default ``lazypulse``)
+``ADAPTER_NAME``             adapter name (default ``telegram``). It is stored as a
+                             task's ``source`` and drives reply routing, so an
+                             existing Store must keep the value it already holds
 ``TICK_SECONDS``             loop interval (default 3)
 ``MAX_CONCURRENT``           cap on tasks running at once (default 4)
 ``REPLY_MIN_INTERVAL``       per-chat auto-reply throttle (default 2)
@@ -112,6 +115,12 @@ class LauncherConfig:
     store_db: str = "pulse.db"
     bot_id: str = "lazypulse"
     agent_name: str = "lazypulse"
+    #: Adapter name, which is what a task record stores as its ``source`` and
+    #: what reply routing looks up. Defaults to ``TelegramInbox``'s own default
+    #: rather than to ``agent_name``: any Store written before this launcher
+    #: existed holds ``source="telegram"``, and renaming the adapter would leave
+    #: those tasks completing with nowhere to send their answer.
+    adapter_name: str = "telegram"
     tick_seconds: float = 3.0
     max_concurrent: int = 4
     reply_min_interval: float = 2.0
@@ -141,6 +150,7 @@ class LauncherConfig:
             store_db=os.environ.get("STORE_DB", "pulse.db"),
             bot_id=os.environ.get("BOT_ID", "lazypulse"),
             agent_name=os.environ.get("AGENT_NAME", "lazypulse"),
+            adapter_name=os.environ.get("ADAPTER_NAME", "telegram"),
             tick_seconds=_env_float("TICK_SECONDS", 3.0),
             max_concurrent=_env_int("MAX_CONCURRENT", 4),
             reply_min_interval=_env_float("REPLY_MIN_INTERVAL", 2.0),
@@ -231,7 +241,16 @@ def build(
 
     client = TelegramClient.from_token(config.bot_token)
     store = Store(db=config.store_db)
-    reviewer = TelegramReviewer(client, store, owner_id=config.owner_id, bot_id=config.bot_id)
+    # owner_chat_id is passed through so *every* unprompted message the launcher
+    # sends goes to the same place: without it a redirected OWNER_CHAT_ID would
+    # move notify_owner's output but leave approval requests in the owner's DM.
+    reviewer = TelegramReviewer(
+        client,
+        store,
+        owner_id=config.owner_id,
+        owner_chat_id=config.owner_chat_id,
+        bot_id=config.bot_id,
+    )
 
     all_tools = list(tools)
     if config.notify_tool:
@@ -258,7 +277,7 @@ def build(
                     reply_with_output=True,
                     reply_min_interval_seconds=config.reply_min_interval,
                 ),
-                name=config.agent_name,
+                name=config.adapter_name,
             )
         ],
         calendar=calendar,

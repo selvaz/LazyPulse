@@ -50,7 +50,7 @@ within_minutes = 120
 | `task` | both | *required* — the instruction to run each time |
 | `cron` | cron | five-field expression |
 | `tz` | cron | IANA timezone the expression is read in (default `UTC`) |
-| `misfire_grace_minutes` | cron | skip the slot if it is later than this |
+| `misfire_grace_minutes` | cron | skip the slot if it is later than this. `0` tolerates no lateness at all — and since a slot is only ever observed one tick *after* it passes, that skips essentially every occurrence. Omit the key to fire however late |
 | `business_days` | cron | skip weekends |
 | `holidays` | cron | ISO dates (or native TOML dates) to skip |
 | `after` | after | name of the schedule to follow |
@@ -72,8 +72,10 @@ lazypulse check-calendar /data/calendar.toml
 ```
 
 It prints what the file declares and exits non-zero if the file is malformed,
-naming the offending schedule. A BOM (which Notepad and PowerShell add) is
-handled — it does not need stripping.
+naming the offending schedule. Cron expressions and timezones are compiled
+during the check, not on first fire, so a typo'd `45 15 * * MONFRI` or an
+unknown zone fails here rather than inside a running `serve`. A BOM (which
+Notepad and PowerShell add) is handled — it does not need stripping.
 
 ## Delivering scheduled output
 

@@ -421,14 +421,33 @@ def _entry_from_toml(path: Path, name: str, body: dict[str, Any]) -> ScheduleEnt
             business = "business_days" in body and _toml_bool(where, "business_days", body["business_days"])
             if business or "holidays" in body:
                 on_days = BusinessDays(holidays=[_toml_date(where, d) for d in body.get("holidays", [])])
+            # ``is not None``, not truthiness: an explicit 0 means "tolerate no
+            # lateness at all", while a missing key means "fire however late".
+            # Collapsing the two would turn the strictest setting into the
+            # loosest one, silently.
             grace = body.get("misfire_grace_minutes")
-            return Cron(
+            if grace is not None and float(grace) < 0:
+                raise ValueError(f"'misfire_grace_minutes' cannot be negative, got {grace!r}.")
+            entry = Cron(
                 expr=body["cron"],
                 tz=body.get("tz", "UTC"),
-                misfire_grace=timedelta(minutes=float(grace)) if grace else None,
+                misfire_grace=timedelta(minutes=float(grace)) if grace is not None else None,
                 on_days=on_days,
                 **common,
             )
+            # Force the trigger now. Neither Cron nor Calendar validates the
+            # expression or the timezone on construction — they are plain
+            # strings until something fires — so without this a calendar with a
+            # typo'd cron or an unknown zone would pass ``check-calendar`` and
+            # fail later inside ``serve``, which is the one thing that check
+            # exists to prevent.
+            try:
+                entry.trigger()
+            except Exception as exc:
+                # croniter says only "[<expr>] is not acceptable", which does not
+                # even mention cron. Name what was being parsed.
+                raise ValueError(f"invalid cron expression or timezone: {exc}") from exc
+            return entry
         return After(after=body["after"], within=timedelta(minutes=float(body.get("within_minutes", 120))), **common)
     except (TypeError, ValueError) as exc:
         raise ValueError(f"{where}: {exc}") from exc

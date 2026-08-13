@@ -180,6 +180,34 @@ def test_a_missing_calendar_file_names_the_path(tmp_path: Path) -> None:
         Calendar.from_toml(tmp_path / "nope.toml")
 
 
+@pytest.mark.skipif(not _HAS_CRONITER, reason="croniter not installed")
+@pytest.mark.parametrize(
+    ("line", "fragment"),
+    [
+        ("cron = 'questa non e una cron'", "invalid cron expression or timezone"),
+        ("cron = '45 15 * * MONFRI'", "invalid cron expression or timezone"),
+        ("cron = '0 * * * *'\ntz = 'Non/Esiste'", "Unknown timezone"),
+    ],
+)
+def test_a_bad_expression_or_timezone_is_caught_while_loading(tmp_path: Path, line: str, fragment: str) -> None:
+    """check-calendar is the pre-deployment gate; it has to catch these."""
+    with pytest.raises(ValueError, match=fragment):
+        Calendar.from_toml(_write(tmp_path, f"[schedules.x]\ntask = 't'\n{line}\n"))
+
+
+@pytest.mark.skipif(not _HAS_CRONITER, reason="croniter not installed")
+def test_an_explicit_zero_grace_is_not_unlimited(tmp_path: Path) -> None:
+    """0 means "tolerate no lateness" — the opposite of an omitted key."""
+    body = "[schedules.x]\ntask = 't'\ncron = '0 * * * *'\nmisfire_grace_minutes = 0\n"
+    assert next(iter(Calendar.from_toml(_write(tmp_path, body)))).misfire_grace == timedelta(0)  # type: ignore[union-attr]
+
+    omitted = "[schedules.x]\ntask = 't'\ncron = '0 * * * *'\n"
+    assert next(iter(Calendar.from_toml(_write(tmp_path, omitted, "b.toml")))).misfire_grace is None  # type: ignore[union-attr]
+
+    with pytest.raises(ValueError, match="cannot be negative"):
+        Calendar.from_toml(_write(tmp_path, body.replace("= 0", "= -5"), "c.toml"))
+
+
 def test_a_real_toml_false_still_disables(tmp_path: Path) -> None:
     body = "[schedules.x]\ntask = 't'\ncron = '0 * * * *'\nenabled = false\nbusiness_days = false\n"
     entry = next(iter(Calendar.from_toml(_write(tmp_path, body))))

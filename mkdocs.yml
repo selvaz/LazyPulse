@@ -51,6 +51,7 @@ plugins:
           - telegram.md
           - gmail.md
           - scheduling.md
+          - launcher.md
           - architecture.md
           - plan_engine.md
           - security.md
@@ -89,6 +90,7 @@ nav:
   - Telegram (recommended): telegram.md
   - Gmail (push & polling): gmail.md
   - Scheduling (calendar): scheduling.md
+  - Launcher (lazypulse serve): launcher.md
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md
   - Security: security.md

@@ -59,6 +59,12 @@ dev = [
 # Documentation-site build (mkdocs → GitHub Pages).
 site = ["mkdocs-material>=9.5,<10.0", "mkdocs-llmstxt>=0.3,<1.0", "pymdown-extensions>=10.0,<11.0"]
 
+[project.scripts]
+# The packaged always-on launcher. Needs the `telegram` extra at runtime (and
+# `cron` when pointed at a calendar); both stay optional so a bare install is
+# still dependency-light.
+lazypulse = "lazypulse.launcher:main"
+
 [project.urls]
 Homepage = "https://github.com/selvaz/LazyPulse"
 Repository = "https://github.com/selvaz/LazyPulse"

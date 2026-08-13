@@ -4,11 +4,26 @@ Bot Telegram conversazionale che gira **24/7** su [Railway](https://railway.app)
 (o Render), gestibile **interamente da mobile**: codice via app GitHub, tutto il
 resto dalla dashboard web.
 
-- `bot.py` — il bot (loop always-on + notifier human-in-the-loop).
+- `bot.py` — involucro sottile: costruisce i tool di LazyCrawler e del registry
+  e li passa a `lazypulse.launcher.serve`.
 - `loadtest.py` — harness di test/stress (offline, senza token: throughput,
   dedup, flusso HITL, recovery, retention). Vedi in fondo.
 - `Dockerfile` — immagine pronta (installa le 3 librerie dai repo pubblici).
 - `requirements.txt` — dipendenze (API moderna da GitHub).
+
+> **Il motore del bot vive nel pacchetto.** Inbox Telegram, policy owner-only,
+> human-in-the-loop, recovery, retention e calendario ricorrente stanno in
+> `lazypulse.launcher`, configurati da variabili d'ambiente e documentati in
+> [Launcher](https://pulse.lazybridge.com/launcher/). Qui resta solo ciò che il
+> pacchetto non deve conoscere: i tool dell'ecosistema.
+>
+> Se non ti servono crawler e registry, questo file non serve affatto —
+> `lazypulse serve` fa tutto il resto.
+
+**Lavoro ricorrente:** imposta `CALENDAR_FILE` a un TOML di schedule (orari,
+giorni di borsa, dipendenze fra job) e il bot lo esegue. Validalo prima con
+`lazypulse check-calendar <file>`. Perché un task schedulato ti raggiunga deve
+usare il tool `notify_owner`: non ha una conversazione in cui rispondere.
 
 **Human-in-the-loop:** quando chiedi al bot un'azione rischiosa (parole come
 *invia, manda, cancella, paga* — configurabili), il task viene parcheggiato e il

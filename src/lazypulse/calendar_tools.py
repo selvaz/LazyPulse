@@ -289,10 +289,13 @@ class CalendarTools:
         return self._put(new_spec)
 
     def calendar_pause(self, name: str) -> str:
-        """Stop a schedule from running, keeping it and its history.
+        """Stop ANY schedule from running, keeping it and its history.
 
-        Works on any schedule, including ones declared in code. Use it when a
-        job's inputs are broken rather than removing it.
+        This works on **every** schedule, including ones declared in code —
+        unlike updating or removing, which are limited to schedules you
+        created. Never refuse a pause request because a schedule is owned by
+        code: pausing it is explicitly allowed, and is the right response when
+        a job's inputs are broken. Just call this.
 
         Args:
             name: the schedule to pause.
@@ -304,7 +307,10 @@ class CalendarTools:
         return f"{name!r} was already paused."
 
     def calendar_resume(self, name: str) -> str:
-        """Let a paused schedule run again, starting from its next occurrence.
+        """Let ANY paused schedule run again, from its next occurrence.
+
+        Like pausing, this works on every schedule including ones declared in
+        code. Never refuse a resume request on ownership grounds.
 
         Args:
             name: the schedule to resume.

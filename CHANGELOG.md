@@ -8,6 +8,30 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 ## [Unreleased]
 
 ### Added
+- **`lazypulse serve`** — the always-on launcher is now part of the package
+  (`lazypulse.launcher`) with a console entry point, instead of living only as a
+  script under `deploy/`. Everything is configured from environment variables:
+  Telegram inbox + owner-only policy, human-in-the-loop reviewer, crash
+  recovery, Store retention, and an optional calendar. See `docs/launcher.md`.
+  - **`Calendar.from_toml()`** — declare recurring work in a TOML file
+    (`CALENDAR_FILE`) so timings change without redeploying code. Unknown keys
+    are rejected rather than ignored: a typo'd `buisness_days` that silently did
+    nothing would let a market job run on Christmas. A UTF-8 BOM (which Notepad
+    and PowerShell add) is handled.
+  - **`lazypulse check-calendar <file>`** — validate a calendar before deploying;
+    prints what it declares, exits non-zero and names the offending schedule.
+  - **`notify_owner` tool** — a scheduled task has no conversation to reply into,
+    since the adapter's reply path keys on an inbound message's chat. Without
+    this the calendar would run and deliver nothing. `NOTIFY_TOOL=0` withholds
+    it; `OWNER_CHAT_ID` redirects it.
+  - `CALENDAR_TOOLS=1` exposes `CalendarTools`, so the timetable can be managed
+    from the chat under the usual autonomy boundary.
+  - `deploy/tg-bot/bot.py` is now a thin wrapper that builds the LazyCrawler and
+    registry tools and hands them to `serve(tools=...)`. Its `Dockerfile` pins
+    `BOT_ID`/`AGENT_NAME` to the values that deployment already uses: `BOT_ID`
+    keys the Telegram update watermark, so changing it would make a redeploy
+    re-read updates it had already handled.
+
 - **`Calendar`** — a declarative timetable of recurring work, written in Python
   and reconciled against the Store when the agent starts. See
   `docs/scheduling.md` and `examples/09_calendar_scheduler.py`.

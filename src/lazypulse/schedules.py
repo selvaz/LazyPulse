@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import re
 from datetime import UTC, date, datetime, timedelta
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
@@ -244,6 +245,61 @@ class Calendar:
             if isinstance(entry, After) and entry.after == entry.name:
                 raise ValueError(f"Schedule {entry.name!r} depends on itself.")
 
+    @classmethod
+    def from_toml(cls, path: str | Path) -> Calendar:
+        """Load a calendar from a TOML file. Each table under ``[schedules]``
+        is one entry, keyed by its name::
+
+            [schedules.etf_daily_stats]
+            task = "Run the daily ETF stats and send the digest"
+            cron = "45 15 * * MON-FRI"
+            tz = "Europe/Rome"
+            action = "external_send"
+            misfire_grace_minutes = 45
+            business_days = true
+            holidays = ["2026-12-25"]
+
+            [schedules.anomaly_check]
+            task = "Investigate today's anomalies"
+            after = "etf_daily_stats"
+            within_minutes = 120
+
+        ``cron`` makes a :class:`Cron`, ``after`` makes an :class:`After`;
+        exactly one must be present. This is the form the packaged launcher
+        reads, so operators can change timings without redeploying code —
+        which also means a malformed file must fail loudly at startup rather
+        than leave an agent running an empty timetable. Every error names the
+        file and the offending schedule.
+        """
+        import tomllib
+
+        path = Path(path)
+        try:
+            # utf-8-sig, not utf-8: this is an operator-edited file, and the
+            # editors most likely to touch it on Windows (Notepad, a PowerShell
+            # redirect) write a UTF-8 BOM. tomllib rejects the BOM with
+            # "Invalid statement (at line 1, column 1)", which says nothing
+            # about the real cause. The codec strips it when present and is a
+            # no-op otherwise.
+            raw = tomllib.loads(path.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            raise FileNotFoundError(f"Calendar file not found: {path}") from None
+        except tomllib.TOMLDecodeError as exc:
+            raise ValueError(f"{path}: invalid TOML — {exc}") from exc
+
+        schedules = raw.get("schedules")
+        if schedules is None:
+            raise ValueError(f"{path}: no [schedules] table. Declare entries as [schedules.<name>].")
+        if not isinstance(schedules, dict):
+            raise ValueError(f"{path}: [schedules] must be a table of named entries.")
+
+        entries: list[ScheduleEntry] = []
+        for name, body in schedules.items():
+            if not isinstance(body, dict):
+                raise ValueError(f"{path}: [schedules.{name}] must be a table.")
+            entries.append(_entry_from_toml(path, name, body))
+        return cls(entries)
+
     def __iter__(self) -> Iterator[AnyEntry]:
         return iter(self._entries.values())
 
@@ -319,6 +375,107 @@ class Calendar:
                 result.removed.append(stored_name)
 
         return result
+
+
+#: Keys accepted in a ``[schedules.<name>]`` TOML table. An unknown key is an
+#: error rather than a silent no-op: a typo'd ``buisness_days`` that quietly did
+#: nothing would let a market job run on Christmas.
+_TOML_COMMON = frozenset({"task", "action", "overlap", "enabled"})
+_TOML_CRON = frozenset({"cron", "tz", "misfire_grace_minutes", "business_days", "holidays"})
+_TOML_AFTER = frozenset({"after", "within_minutes"})
+
+
+def _entry_from_toml(path: Path, name: str, body: dict[str, Any]) -> ScheduleEntry:
+    """Build one entry from a ``[schedules.<name>]`` table."""
+    where = f"{path}: [schedules.{name}]"
+    is_cron, is_after = "cron" in body, "after" in body
+    if is_cron == is_after:
+        raise ValueError(
+            f"{where} must have exactly one of 'cron' or 'after' (found {'both' if is_cron else 'neither'})."
+        )
+
+    allowed = _TOML_COMMON | (_TOML_CRON if is_cron else _TOML_AFTER)
+    if unknown := set(body) - allowed:
+        raise ValueError(f"{where}: unknown key(s) {sorted(unknown)}. Accepted here: {sorted(allowed)}.")
+    if not body.get("task"):
+        raise ValueError(f"{where} needs a non-empty 'task' — the instruction to run each time.")
+
+    common: dict[str, Any] = {"name": name, "text": body["task"]}
+    if "action" in body:
+        try:
+            common["action"] = ActionClass(body["action"])
+        except ValueError:
+            raise ValueError(
+                f"{where}: unknown action {body['action']!r}. One of: {[a.value for a in ActionClass]}."
+            ) from None
+    if "overlap" in body:
+        if body["overlap"] not in ("skip", "allow"):
+            raise ValueError(f'{where}: \'overlap\' must be "skip" or "allow", got {body["overlap"]!r}.')
+        common["overlap"] = body["overlap"]
+    if "enabled" in body:
+        common["enabled"] = _toml_bool(where, "enabled", body["enabled"])
+
+    try:
+        if is_cron:
+            on_days = None
+            business = "business_days" in body and _toml_bool(where, "business_days", body["business_days"])
+            if business or "holidays" in body:
+                on_days = BusinessDays(holidays=[_toml_date(where, d) for d in body.get("holidays", [])])
+            # ``is not None``, not truthiness: an explicit 0 means "tolerate no
+            # lateness at all", while a missing key means "fire however late".
+            # Collapsing the two would turn the strictest setting into the
+            # loosest one, silently.
+            grace = body.get("misfire_grace_minutes")
+            if grace is not None and float(grace) < 0:
+                raise ValueError(f"'misfire_grace_minutes' cannot be negative, got {grace!r}.")
+            entry = Cron(
+                expr=body["cron"],
+                tz=body.get("tz", "UTC"),
+                misfire_grace=timedelta(minutes=float(grace)) if grace is not None else None,
+                on_days=on_days,
+                **common,
+            )
+            # Force the trigger now. Neither Cron nor Calendar validates the
+            # expression or the timezone on construction — they are plain
+            # strings until something fires — so without this a calendar with a
+            # typo'd cron or an unknown zone would pass ``check-calendar`` and
+            # fail later inside ``serve``, which is the one thing that check
+            # exists to prevent.
+            try:
+                entry.trigger()
+            except Exception as exc:
+                # croniter says only "[<expr>] is not acceptable", which does not
+                # even mention cron. Name what was being parsed.
+                raise ValueError(f"invalid cron expression or timezone: {exc}") from exc
+            return entry
+        return After(after=body["after"], within=timedelta(minutes=float(body.get("within_minutes", 120))), **common)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{where}: {exc}") from exc
+
+
+def _toml_bool(where: str, key: str, value: Any) -> bool:
+    """Require a real TOML boolean, never a truthy stand-in.
+
+    ``enabled = "false"`` is the common way to get this wrong, and ``bool()``
+    would turn that string into ``True`` — silently running a schedule the
+    operator wrote down as disabled. A loader that rejects unknown keys has no
+    business coercing this one.
+    """
+    if not isinstance(value, bool):
+        raise ValueError(f"{where}: '{key}' must be true or false (unquoted), got {value!r}.")
+    return value
+
+
+def _toml_date(where: str, value: Any) -> date:
+    """Accept both a native TOML date and an ISO string for a holiday."""
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            raise ValueError(f"{where}: holiday {value!r} is not an ISO date (YYYY-MM-DD).") from None
+    raise ValueError(f"{where}: holiday {value!r} must be a date or an ISO date string.")
 
 
 def _iter_schedule_records(store: Store) -> list[tuple[str, dict[str, Any]]]:

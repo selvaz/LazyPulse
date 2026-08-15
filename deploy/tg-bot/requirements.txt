@@ -2,7 +2,10 @@
 # I tre repo sono pubblici, quindi il build non richiede alcun token.
 lazybridge[deepseek] @ git+https://github.com/selvaz/LazyBridge.git
 lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git
-lazypulse[telegram] @ git+https://github.com/selvaz/LazyPulse.git
+# `cron` non è opzionale qui: CALENDAR_FILE con una schedule cron importa
+# croniter durante la sync del calendario, quindi senza l'extra il bot non
+# partirebbe proprio nel momento in cui gli dai un calendario.
+lazypulse[telegram,cron] @ git+https://github.com/selvaz/LazyPulse.git
 # Crawler web: [nlp] abilita CRAWL_CONTENT=ml (modelli locali); [search] installa
 # 'ddgs', necessario al backend DuckDuckGo di web_search (altrimenti fallisce a
 # runtime). Repo pubblico → niente token.

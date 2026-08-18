@@ -7,6 +7,8 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-08-18
+
 ### Added
 - **`lazypulse serve`** — the always-on launcher is now part of the package
   (`lazypulse.launcher`) with a console entry point, instead of living only as a

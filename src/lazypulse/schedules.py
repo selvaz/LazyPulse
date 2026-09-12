@@ -97,6 +97,9 @@ class ScheduleEntry(BaseModel):
     #: Telegram or email reads as ``EXTERNAL_SEND`` in the ledger rather than
     #: masquerading as a public read.
     action: ActionClass = ActionClass.READ_PUBLIC
+    #: Deliver the completed worker output through the PulseAgent's optional
+    #: ``scheduled_responder``. False preserves silent scheduled execution.
+    notify: bool = False
     enabled: bool = True
     overlap: Literal["skip", "allow"] = "skip"
 
@@ -380,7 +383,7 @@ class Calendar:
 #: Keys accepted in a ``[schedules.<name>]`` TOML table. An unknown key is an
 #: error rather than a silent no-op: a typo'd ``buisness_days`` that quietly did
 #: nothing would let a market job run on Christmas.
-_TOML_COMMON = frozenset({"task", "action", "overlap", "enabled"})
+_TOML_COMMON = frozenset({"task", "action", "notify", "overlap", "enabled"})
 _TOML_CRON = frozenset({"cron", "tz", "misfire_grace_minutes", "business_days", "holidays"})
 _TOML_AFTER = frozenset({"after", "within_minutes"})
 
@@ -408,6 +411,8 @@ def _entry_from_toml(path: Path, name: str, body: dict[str, Any]) -> ScheduleEnt
             raise ValueError(
                 f"{where}: unknown action {body['action']!r}. One of: {[a.value for a in ActionClass]}."
             ) from None
+    if "notify" in body:
+        common["notify"] = _toml_bool(where, "notify", body["notify"])
     if "overlap" in body:
         if body["overlap"] not in ("skip", "allow"):
             raise ValueError(f'{where}: \'overlap\' must be "skip" or "allow", got {body["overlap"]!r}.')

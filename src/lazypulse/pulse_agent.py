@@ -19,6 +19,8 @@ from __future__ import annotations
 
 import asyncio
 import concurrent.futures
+import inspect
+import logging
 import threading
 import time
 import uuid
@@ -61,6 +63,8 @@ _MAX_RESTARTS = 3
 #: whole task space, so it runs at most this often rather than every tick.
 _PRUNE_INTERVAL = 60.0
 
+logger = logging.getLogger(__name__)
+
 
 class PulseAgent(Agent):
     """Agent + tick loop + policy + adapters."""
@@ -82,6 +86,7 @@ class PulseAgent(Agent):
         adapter_backoff_cap: float = 300.0,
         action_classifier: Callable[[InboundMessage], ActionClass] | None = None,
         command_filter: Callable[[InboundMessage], bool] | None = None,
+        scheduled_responder: Callable[[str, str, str], Any] | None = None,
         **agent_kwargs: Any,
     ) -> None:
         # Risk note: super().__init__ MUST run first. Agent.__init__ registers
@@ -129,6 +134,10 @@ class PulseAgent(Agent):
         # human-in-the-loop over the same inbound channel.
         self._action_classifier = action_classifier
         self._command_filter = command_filter
+        # Optional delivery hook for completed recurring work. Schedule entries
+        # must independently opt in with ``notify=True``; configuring the hook
+        # alone never turns ordinary programmatic tasks into notifications.
+        self._scheduled_responder = scheduled_responder
         self._unsafe_allow_all = unsafe_allow_all
         # Safety gate: a PulseAgent ingesting from external adapters with no
         # policy would run *every* inbound message (the no-policy path grants
@@ -342,6 +351,8 @@ class PulseAgent(Agent):
         run_at: datetime | None = None,
         action: ActionClass = ActionClass.READ_PUBLIC,
         task_id: str | None = None,
+        notify: bool = False,
+        schedule_name: str | None = None,
     ) -> str:
         """Enqueue a task to run at ``run_at`` (default: now). Returns its ``task_id``.
 
@@ -355,7 +366,9 @@ class PulseAgent(Agent):
         path uses it to record the link from a schedule to the task it produced
         *in the same compare-and-swap that claims the occurrence* — the claim
         has to land before the task is written, or two agents sharing a Store
-        could both fire the same slot."""
+        could both fire the same slot. ``notify`` and ``schedule_name`` carry
+        the opt-in delivery contract from a recurring schedule; both default
+        to silent, source-less programmatic execution."""
         now = self._clock()
         record = PulseRecord(
             task_id=task_id if task_id is not None else str(uuid.uuid4()),
@@ -364,6 +377,8 @@ class PulseAgent(Agent):
             created_at=now,
             run_at=run_at or now,
             source_event_id=f"local:{uuid.uuid4()}",
+            notify=notify,
+            schedule_name=schedule_name,
             identity=Identity(trust=TrustLevel.SYSTEM),
             action_class=action,
             decision=PolicyDecision.ALLOW,
@@ -852,21 +867,46 @@ class PulseAgent(Agent):
         return final.status
 
     async def _maybe_reply(self, record: PulseRecord) -> None:
-        """Route a completed task's output back to its originating conversation.
+        """Deliver a completed task's output through its opted-in reply path.
 
-        Only fires when the source adapter implements :class:`Responder` (e.g.
-        ``TelegramInbox``) and the worker produced text. Best-effort: a reply
-        failure is logged to the Session but never un-completes the task."""
-        if record.source is None or not record.worker_text:
+        Inbound tasks keep their existing source-adapter route. Source-less
+        recurring tasks use ``scheduled_responder`` only when their schedule
+        set ``notify=True``. Delivery is best-effort and happens after the
+        completed record has been persisted, so failure cannot un-complete it."""
+        if record.worker_text is None:
             return
-        adapter = self._adapters_by_name.get(record.source)
-        if not isinstance(adapter, Responder):
+
+        if record.source is not None:
+            adapter = self._adapters_by_name.get(record.source)
+            if not isinstance(adapter, Responder):
+                return
+            assert self.store is not None
+            try:
+                await adapter.reply(record, record.worker_text, store=self.store, session=self.session)
+            except Exception as exc:
+                self._emit("pulse.reply_error", {"task_id": record.task_id, "error": f"{type(exc).__name__}: {exc}"})
             return
-        assert self.store is not None
+
+        if not record.notify or self._scheduled_responder is None:
+            return
         try:
-            await adapter.reply(record, record.worker_text, store=self.store, session=self.session)
+            result = self._scheduled_responder(record.worker_text, record.task_id, record.schedule_name or "")
+            if inspect.isawaitable(result):
+                await result
         except Exception as exc:
-            self._emit("pulse.reply_error", {"task_id": record.task_id, "error": f"{type(exc).__name__}: {exc}"})
+            logger.exception(
+                "Scheduled responder failed for task %s (schedule %s)",
+                record.task_id,
+                record.schedule_name,
+            )
+            self._emit(
+                "pulse.scheduled_reply_error",
+                {
+                    "task_id": record.task_id,
+                    "schedule_name": record.schedule_name,
+                    "error": f"{type(exc).__name__}: {exc}",
+                },
+            )
 
     # ------------------------------------------------------------------ #
     # Crash recovery
@@ -1183,7 +1223,14 @@ class PulseAgent(Agent):
                 {"schedule": record.name, "reason": skip_reason, "at": now.isoformat()},
             )
             return
-        self.schedule(record.spec.text, run_at=now, action=record.spec.action, task_id=task_id)
+        self.schedule(
+            record.spec.text,
+            run_at=now,
+            action=record.spec.action,
+            task_id=task_id,
+            notify=record.spec.notify,
+            schedule_name=record.name,
+        )
         report.fired += 1
         self._emit("pulse.schedule_fired", {"schedule": record.name, "task_id": task_id, "at": now.isoformat()})
 

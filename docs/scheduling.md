@@ -17,6 +17,7 @@ calendar = Calendar([
          "45 15 * * MON-FRI",
          tz="Europe/Rome",
          action=ActionClass.EXTERNAL_SEND,
+         notify=True,
          on_days=BusinessDays(holidays=[date(2026, 1, 1), date(2026, 12, 25)]),
          misfire_grace=timedelta(minutes=45)),
 
@@ -28,11 +29,47 @@ calendar = Calendar([
 ])
 
 pulse = PulseAgent(name="pulse", engine=..., store=Store(db="pulse.db"),
-                   calendar=calendar)
+                   calendar=calendar,
+                   scheduled_responder=lambda text, task_id, schedule_name: ...)
 pulse.serve()
 ```
 
 Requires the `cron` extra: `pip install 'lazypulse[cron]'`.
+
+## Delivering a schedule's final response
+
+Recurring work is silent by default. Set `notify=True` on an entry and pass a
+`scheduled_responder` to `PulseAgent` to deliver its completed worker output:
+
+```python
+async def deliver(worker_text: str, task_id: str, schedule_name: str) -> None:
+    await telegram.send_message(
+        chat_id=owner_chat_id,
+        text=f"[{schedule_name}] {worker_text}",
+    )
+
+pulse = PulseAgent(
+    name="pulse",
+    engine=...,
+    store=...,
+    calendar=Calendar([
+        Cron("daily_digest", "Build the daily digest", "0 9 * * *",
+             action=ActionClass.EXTERNAL_SEND, notify=True),
+    ]),
+    scheduled_responder=deliver,
+)
+```
+
+The responder may be synchronous or asynchronous. It is called after the
+completed task record, including `worker_text`, has been written to the Store.
+If it raises, LazyPulse logs the exception, emits `pulse.scheduled_reply_error`,
+and leaves the task completed. `notify=False` (the default) makes no delivery
+attempt even when a responder is configured; `notify=True` with no responder
+configured is a safe no-op. Inbound conversational tasks continue to reply
+through their source adapter and never use this hook.
+
+TOML calendars use the same opt-in with `notify = true` alongside
+`action = "external_send"`.
 
 ## The name is the identity
 

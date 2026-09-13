@@ -65,7 +65,7 @@ from lazypulse.schedules import (
     ScheduleEntry,
     ScheduleRecord,
 )
-from lazypulse.tasks import approve_task, pending_tasks, purge_terminal_tasks, reject_task
+from lazypulse.tasks import approve_task, get_task, list_tasks, pending_tasks, purge_terminal_tasks, reject_task
 
 # Single-source the version from installed distribution metadata so
 # ``__version__`` and ``importlib.metadata.version("lazypulse")`` can never
@@ -200,6 +200,9 @@ __all__ = [
     "approve_task",
     "reject_task",
     "purge_terminal_tasks",
+    # Task lookup (read-only)
+    "get_task",
+    "list_tasks",
     # Keys
     "store_keys",
 ]

@@ -119,6 +119,11 @@ class PulseRecord(BaseModel):
     # programmatically scheduled task has no source.
     source: str | None = None
     inbound_metadata: dict[str, Any] = Field(default_factory=dict)
+    # Opt-in delivery metadata for tasks produced by recurring schedules.
+    # Defaults keep records written by older versions valid and leave ordinary
+    # programmatic tasks silent.
+    notify: bool = False
+    schedule_name: str | None = None
     identity: Identity | None = None
     action_class: ActionClass = ActionClass.READ_PUBLIC
     decision: PolicyDecision | None = None

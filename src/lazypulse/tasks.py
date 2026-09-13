@@ -72,6 +72,29 @@ def pending_tasks(store: Store) -> list[PulseRecord]:
     ]
 
 
+def get_task(store: Store, task_id: str) -> PulseRecord | None:
+    """The task record for ``task_id``, or ``None`` if it doesn't exist."""
+    raw = store.read(store_keys.task_key(task_id))
+    return PulseRecord.model_validate(raw) if isinstance(raw, dict) else None
+
+
+def list_tasks(store: Store, *, status: str | None = None, limit: int = 100) -> list[PulseRecord]:
+    """Every task record, optionally filtered by ``status``, newest first.
+
+    Newest-first is by ``created_at``, not insertion/scan order, so callers get
+    a stable ordering regardless of how the store iterates its keys.
+    """
+    if limit <= 0:
+        raise ValueError(f"limit must be positive, got {limit}")
+    records = [
+        PulseRecord.model_validate(raw)
+        for _key, raw in _iter_task_records(store)
+        if status is None or raw.get("status") == status
+    ]
+    records.sort(key=lambda r: r.created_at, reverse=True)
+    return records[:limit]
+
+
 def approve_task(store: Store, task_id: str, *, run_at: datetime | None = None) -> bool:
     """Approve a parked task: ``awaiting_review`` → ``scheduled``.
 

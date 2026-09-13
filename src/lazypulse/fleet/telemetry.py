@@ -10,6 +10,7 @@ visible to any UI rather than being flattened into one misleading boolean.
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 import threading
@@ -25,6 +26,10 @@ from lazypulse.tasks import list_tasks
 
 DEFAULT_AGENT_STATE_DIR = Path("C:/ProgramData/lazypulse/fleet")
 PROCESS_QUERY_CACHE_TTL_SECONDS = 7.5
+
+#: Ceiling on how far back `_activity_for` will widen its search past
+#: skipped status-poll events -- see that function for why it widens at all.
+_MAX_ACTIVITY_LOOKBACK = 2000
 
 
 class StoreReader(Protocol):
@@ -198,6 +203,25 @@ def _agent_session_path(state_dir: Path, name: str) -> Path:
     return store_path.with_name(f"{store_path.stem}.session.sqlite")
 
 
+def _cmdline_mentions(store_path: Path, running_cmdlines: str | object) -> bool:
+    """Whether an agent's own store path appears in a raw process-cmdline dump.
+
+    Both sides go through :func:`os.path.normcase` first. A ``Path``-built
+    string always carries native separators and whatever case its state
+    directory happens to be spelled in, while the real command line carries
+    whatever the launcher actually typed -- so a plain substring check
+    reports a false "not running" for a live process pointing at the very
+    same file, purely because one side used ``/`` or a different case. Found
+    live in the project this was promoted from (its ``list_specialists``/
+    ``fleet_status`` reported a permanent false MISMATCH for any specialist
+    launched by hand); ``normcase`` is the one call that fixes both slash
+    style and case on Windows, and is a harmless no-op on POSIX.
+    """
+    needle = os.path.normcase(str(store_path))
+    haystack = os.path.normcase(str(running_cmdlines))
+    return needle in haystack
+
+
 def _activity_for(
     session_db: str | Path | None,
     errors: list[str],
@@ -207,23 +231,31 @@ def _activity_for(
     if session_db is None:
         errors.append("session telemetry missing")
         return None
-    # A fixed limit=3 window, combined with skipping fleet_status calls,
-    # could hide a real prior event entirely if the newest 3 events all
-    # happen to be repeated fleet_status polls -- a real risk for a
-    # self-supervising agent that gets inspected often. Widening the
-    # window specifically when filtering is active reduces (without
-    # fully eliminating) that risk at negligible extra read cost. Found
-    # by Codex review before this ever shipped.
-    limit = 20 if skip_fleet_status else 3
-    try:
-        session_events = read_session_events(session_db, limit=limit)
-    except (OSError, sqlite3.Error, ValueError) as exc:
-        errors.append(f"session telemetry missing ({type(exc).__name__})")
-        return None
-    for event in session_events:
-        if skip_fleet_status and event.event_type == "tool_call" and event.tool_name == "fleet_status":
-            continue
-        return event
+    # Any FIXED window, combined with skipping fleet_status calls, can hide
+    # real prior activity entirely: a self-supervising agent inspected N
+    # times in a row pushes its last genuine event past the end of an
+    # N-sized window, and it reads as "no activity" when the session
+    # actually has plenty. So when filtering is active the window WIDENS
+    # until either a non-skipped event is found or a full read came back
+    # with fewer rows than asked for (i.e. the session is exhausted, so
+    # there is genuinely nothing else to find). Bounded by _MAX_LOOKBACK
+    # rather than unbounded, since a session db is read live and a
+    # pathological one should not stall a status poll. Found by Codex
+    # review before this ever shipped (twice: first the fixed 3, then the
+    # fixed 20 that replaced it).
+    windows = (20, 200, _MAX_ACTIVITY_LOOKBACK) if skip_fleet_status else (3,)
+    for limit in windows:
+        try:
+            session_events = read_session_events(session_db, limit=limit)
+        except (OSError, sqlite3.Error, ValueError) as exc:
+            errors.append(f"session telemetry missing ({type(exc).__name__})")
+            return None
+        for event in session_events:
+            if skip_fleet_status and event.event_type == "tool_call" and event.tool_name == "fleet_status":
+                continue
+            return event
+        if len(session_events) < limit:
+            break  # the whole session was read and every event was skipped
     return None
 
 
@@ -317,7 +349,7 @@ def read_fleet_snapshot(
         activity = _activity_for(_agent_session_path(state_dir, record.name), errors)
         if resolved_cmdlines is None:
             process_state: Literal["running", "not_running", "unknown"] = "unknown"
-        elif str(store_path) in str(resolved_cmdlines):
+        elif _cmdline_mentions(store_path, resolved_cmdlines):
             process_state = "running"
         else:
             process_state = "not_running"

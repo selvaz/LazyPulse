@@ -103,9 +103,19 @@ class AgentRegistry:
         try:
             self.register(name=name, function=function, tick_cron=tick_cron, config=config)
         except Exception:
+            # terminate() alone is not a guarantee: a child that traps or
+            # ignores the signal outlives it, and swallowing the resulting
+            # TimeoutExpired would re-raise while leaving exactly the live,
+            # untracked orphan this rollback exists to prevent. Escalate to
+            # kill() the same way the supervisor's own shutdown path does.
+            # Found by Codex review before this ever shipped.
             process.terminate()
-            with contextlib.suppress(subprocess.TimeoutExpired):
+            try:
                 process.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    process.wait(timeout=10)
             raise
         return process
 
@@ -128,6 +138,52 @@ class AgentRegistry:
         records.sort(key=lambda record: record.created_at)
         return records
 
+    def update(
+        self,
+        name: str,
+        *,
+        function: str | None = None,
+        tick_cron: str | None = None,
+        config: dict[str, Any] | None = None,
+    ) -> AgentRecord | None:
+        """Read-modify-write ANY subset of an agent's declared config fields.
+
+        ``None`` (the default) on any parameter means "leave this field
+        exactly as it is", not "clear it". Updating nothing at all is a
+        valid, meaningful call -- a caller bouncing a process without a
+        config change -- and returns the record unchanged rather than
+        treating it as an error.
+
+        Uses ``compare_and_swap``, not the bare write ``mark_stopped`` uses:
+        a stop is idempotent so last-writer-wins costs nothing, but a lost
+        concurrent edit HERE would silently discard one of two different
+        field changes landing close together (a stale prompt in ``config``,
+        or a ``tick_cron`` that quietly reverts). Exactly ONE attempt, no
+        retry loop -- returning ``None`` on a lost race (the same value as
+        "not registered"; a caller that just confirmed the record exists
+        knows which case applies) beats retrying against a moving target.
+
+        Deliberately leaves ``status``/``created_at``/``stopped_at`` alone:
+        editing config is not, by itself, stopping or starting anything.
+        The process lifecycle around a config change belongs to the caller
+        (see :meth:`mark_active` for the other half).
+        """
+        raw = self._store.read(self._key(name))
+        if not isinstance(raw, dict):
+            return None
+        record = AgentRecord.model_validate(raw)
+        updates = {
+            key: value
+            for key, value in {"function": function, "tick_cron": tick_cron, "config": config}.items()
+            if value is not None
+        }
+        if not updates:
+            return record
+        updated = record.model_copy(update=updates)
+        if not self._store.compare_and_swap(self._key(name), raw, updated.model_dump(mode="json")):
+            return None
+        return updated
+
     def mark_stopped(self, name: str) -> bool:
         """Mark an agent stopped; return false only when it is unregistered.
 
@@ -138,6 +194,25 @@ class AgentRegistry:
         if record is None:
             return False
         updated = record.model_copy(update={"status": "stopped", "stopped_at": datetime.now(UTC)})
+        self._store.write(self._key(name), updated.model_dump(mode="json"))
+        return True
+
+    def mark_active(self, name: str) -> bool:
+        """The other direction of :meth:`mark_stopped`, for a confirmed respawn.
+
+        Call this ONLY after a replacement process is actually confirmed
+        started, never as part of a plain field edit (:meth:`update` leaves
+        ``status`` alone for exactly that case). Without it, restarting an
+        agent that had been stopped brings its process back while the
+        registry still declares it "stopped" -- a permanent, self-inflicted
+        mismatch between declared and observed state that fleet telemetry
+        would keep reporting forever for an agent that is, correctly,
+        running.
+        """
+        record = self.get(name)
+        if record is None:
+            return False
+        updated = record.model_copy(update={"status": "active", "stopped_at": None})
         self._store.write(self._key(name), updated.model_dump(mode="json"))
         return True
 

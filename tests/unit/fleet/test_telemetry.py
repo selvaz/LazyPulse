@@ -174,6 +174,34 @@ def test_telemetry_missing_takes_priority_over_stopped_status(tmp_path: Path) ->
     assert any("session telemetry missing" in error for error in archived.telemetry_errors)
 
 
+def test_process_match_normalizes_separators_and_case_before_comparing(tmp_path: Path) -> None:
+    """A Path-built store path always carries native separators and whatever
+    case its state dir is spelled in, while a real command line carries
+    whatever the launcher actually typed. A plain substring check reports a
+    false "not_running" for a live process pointing at the very same file --
+    found live in the project this was promoted from, where any specialist
+    launched by hand read as a permanent MISMATCH."""
+    store = Store()
+    AgentRegistry(store).register(name="research", function="research assistant", tick_cron="0 * * * *")
+    state_dir = tmp_path / "agents"
+    state_dir.mkdir()
+    research_store = state_dir / "research.sqlite"
+    Store(db=str(research_store)).write("sentinel", True)
+    _create_session_db(state_dir / "research.session.sqlite", ("message", {"text": "ready"}, 1.0))
+
+    # Same file, spelled with forward slashes and different case -- exactly
+    # what a hand-launched process's command line looks like on Windows.
+    cmdline = f"python -m agent --store-db {str(research_store).replace(chr(92), '/').upper()}"
+
+    [agent] = read_fleet_snapshot(
+        store,
+        specialist_state_dir=state_dir,
+        process_cmdlines=cmdline,
+    ).agents
+
+    assert agent.process_state == "running"
+
+
 def test_task_lookup_failure_alone_reports_telemetry_missing_not_idle(tmp_path: Path) -> None:
     """A task-store read failure alone -- with the SESSION db still
     readable -- must also report telemetry_missing, not silently fall
@@ -206,13 +234,13 @@ def test_self_agent_activity_survives_more_than_three_repeated_fleet_status_poll
     self-supervising agent inspected often. Found by Codex review before
     this ever shipped."""
     session_db = tmp_path / "primary.session.sqlite"
+    # 40 consecutive status polls: past the old fixed 3-event window AND
+    # past the fixed 20 that replaced it, so only a widening search finds
+    # the one real event underneath them.
     _create_session_db(
         session_db,
         ("message", {"text": "real activity"}, 1.0),
-        ("tool_call", {"tool_name": "fleet_status"}, 2.0),
-        ("tool_call", {"tool_name": "fleet_status"}, 3.0),
-        ("tool_call", {"tool_name": "fleet_status"}, 4.0),
-        ("tool_call", {"tool_name": "fleet_status"}, 5.0),
+        *[("tool_call", {"tool_name": "fleet_status"}, float(i)) for i in range(2, 42)],
     )
     store = Store()
 

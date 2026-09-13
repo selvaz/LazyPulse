@@ -20,7 +20,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
-from lazypulse.fleet.events import read_process_events
+from lazypulse.fleet.events import DEFAULT_PROCESS_EVENT_PREFIX, read_process_events
 from lazypulse.fleet.registry import DEFAULT_AGENT_PREFIX, AgentRecord
 from lazypulse.tasks import list_tasks
 
@@ -268,9 +268,9 @@ def _running_task(store: StoreReader, errors: list[str]) -> str | None:
     return tasks[0].text if tasks else None
 
 
-def _latest_events_by_agent(store: StoreReader) -> dict[str, dict[str, Any]]:
+def _latest_events_by_agent(store: StoreReader, prefix: str) -> dict[str, dict[str, Any]]:
     latest: dict[str, dict[str, Any]] = {}
-    for event in read_process_events(store):
+    for event in read_process_events(store, prefix=prefix):
         agent_name = event.get("agent_name")
         if isinstance(agent_name, str) and agent_name not in latest:
             latest[agent_name] = event
@@ -285,6 +285,13 @@ def read_fleet_snapshot(
     registry_prefix: str = DEFAULT_AGENT_PREFIX,
     *,
     self_agents: list[tuple[str, str, str | Path]] | None = None,
+    #: Separate from ``registry_prefix`` because they are separate Store
+    #: namespaces, but a caller that moved one has almost always moved
+    #: both -- and getting this wrong is silent: every agent's
+    #: ``latest_process_event`` simply reads ``None`` forever, which is
+    #: indistinguishable from an agent that has never crashed. Found in
+    #: LazyCEO, whose events live under ``ceo:process-event:``.
+    process_event_prefix: str = DEFAULT_PROCESS_EVENT_PREFIX,
     specialist_state_dir: str | Path = DEFAULT_AGENT_STATE_DIR,
     process_cmdlines: str | object | None = _PROCESS_CMDLINES_UNSET,
     observed_at: datetime | None = None,
@@ -302,7 +309,7 @@ def read_fleet_snapshot(
         query_running_specialist_cmdlines() if process_cmdlines is _PROCESS_CMDLINES_UNSET else process_cmdlines
     )
     try:
-        process_events = _latest_events_by_agent(store)
+        process_events = _latest_events_by_agent(store, process_event_prefix)
     except Exception:
         process_events = {}
 

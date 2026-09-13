@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 import subprocess
 from datetime import UTC, datetime, timedelta
@@ -174,6 +175,12 @@ def test_telemetry_missing_takes_priority_over_stopped_status(tmp_path: Path) ->
     assert any("session telemetry missing" in error for error in archived.telemetry_errors)
 
 
+@pytest.mark.skipif(
+    os.name != "nt",
+    reason="normcase only unifies case and slash style on Windows -- on POSIX '/Foo' and '/foo' "
+    "are genuinely different files, so refusing to match them there is the correct behaviour, "
+    "not a bug to assert against",
+)
 def test_process_match_normalizes_separators_and_case_before_comparing(tmp_path: Path) -> None:
     """A Path-built store path always carries native separators and whatever
     case its state dir is spelled in, while a real command line carries

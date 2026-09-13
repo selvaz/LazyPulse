@@ -263,6 +263,40 @@ def test_self_agent_activity_survives_more_than_three_repeated_fleet_status_poll
     assert primary.last_activity.event_type == "message"
 
 
+def test_a_custom_process_event_prefix_is_honoured_not_silently_empty(tmp_path: Path) -> None:
+    """Moving the registry namespace almost always means the event namespace
+    moved too, and reading the wrong one fails silently: latest_process_event
+    is None forever, which looks exactly like an agent that has never crashed.
+    Found in LazyCEO, whose events live under "ceo:process-event:"."""
+    store = Store()
+    record = AgentRecord(
+        name="legacy",
+        function="migrated assistant",
+        tick_cron="0 * * * *",
+        status="active",
+        created_at=datetime.now(UTC),
+    )
+    _write_record(store, record, prefix="ceo:specialist:")
+    store.write(
+        "ceo:process-event:crash",
+        {"agent_name": "legacy", "created_at": "2026-01-02T00:00:00+00:00", "exit_code": 3},
+    )
+
+    def snapshot(**kwargs):
+        [agent] = read_fleet_snapshot(
+            store,
+            registry_prefix="ceo:specialist:",
+            specialist_state_dir=tmp_path / "missing",
+            process_cmdlines=None,
+            **kwargs,
+        ).agents
+        return agent
+
+    assert snapshot(process_event_prefix="ceo:process-event:").latest_process_event["exit_code"] == 3
+    # The default prefix finds nothing here -- that is the silent failure.
+    assert snapshot().latest_process_event is None
+
+
 def test_registry_prefix_and_latest_process_event_are_correlated(tmp_path: Path) -> None:
     store = Store()
     record = AgentRecord(

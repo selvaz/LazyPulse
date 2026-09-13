@@ -7,6 +7,15 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+### Added
+- **`lazypulse.fleet`** — generic always-on fleet infrastructure promoted
+  from LazyCEO: a Store-backed supervised-agent registry, durable planned-stop
+  markers and process-event outbox, an external restart/stall supervisor, and
+  read-only fleet telemetry snapshots. Neutral Store prefixes are configurable
+  for compatibility with existing deployments. The promoted APIs fix orphaned
+  active records on spawn failure and let stall detection consult the actual
+  (potentially cross-Store) pending-approval source.
+
 ## [0.4.0] — 2026-08-18
 
 ### Added

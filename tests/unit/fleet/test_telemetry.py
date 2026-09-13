@@ -151,6 +151,36 @@ def test_self_agent_is_unconditionally_running_but_registered_agent_uses_live_st
     assert research.operational_state == "idle"
 
 
+def test_self_agent_without_a_session_db_is_reported_missing_not_dropped(tmp_path: Path) -> None:
+    """A caller that has no session db for the agent taking the snapshot
+    still gets that agent in the fleet -- the one thing it must never do is
+    silently omit the process doing the looking. The behaviour already held
+    (``_activity_for`` defines it for ``None``) but was neither declared in
+    the signature nor pinned by a test, so LazyCEO had to pass ``None``
+    behind a ``type: ignore``."""
+    fleet_store = Store()
+    AgentRegistry(fleet_store).register(name="research", function="research assistant", tick_cron="0 * * * *")
+    state_dir = tmp_path / "agents"
+    state_dir.mkdir()
+    research_store = state_dir / "research.sqlite"
+    Store(db=str(research_store)).write("sentinel", True)
+    _create_session_db(state_dir / "research.session.sqlite", ("message", {"text": "ready"}, 1.0))
+
+    snapshot = read_fleet_snapshot(
+        fleet_store,
+        self_agents=[("primary", "coordinator", None)],
+        specialist_state_dir=state_dir,
+        process_cmdlines=str(research_store),
+    )
+
+    assert [agent.agent_id for agent in snapshot.agents] == ["primary", "research"]
+    primary = snapshot.agents[0]
+    assert primary.process_state == "running"  # still the live caller
+    assert primary.operational_state == "telemetry_missing"
+    assert primary.last_activity is None
+    assert any("session telemetry missing" in error for error in primary.telemetry_errors)
+
+
 def test_telemetry_missing_takes_priority_over_stopped_status(tmp_path: Path) -> None:
     store = Store()
     record = AgentRecord(

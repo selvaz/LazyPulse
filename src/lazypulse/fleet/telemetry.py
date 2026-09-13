@@ -284,7 +284,16 @@ def read_fleet_snapshot(
     store: StoreReader,
     registry_prefix: str = DEFAULT_AGENT_PREFIX,
     *,
-    self_agents: list[tuple[str, str, str | Path]] | None = None,
+    #: ``session_db`` is optional per row: a self-agent whose session db
+    #: isn't known to its caller still belongs in the snapshot, reported as
+    #: ``telemetry_missing`` rather than omitted -- ``_activity_for``
+    #: already defines exactly that behaviour for ``None``. The annotation
+    #: said ``str | Path``, so the one real caller doing this (LazyCEO,
+    #: whose ``ceo_session_db`` is legitimately ``None`` when the CEO runs
+    #: without one) had to carry a ``type: ignore`` to express a supported
+    #: case. Widened rather than narrowing the caller: dropping the row
+    #: would silently lose the agent taking the snapshot.
+    self_agents: list[tuple[str, str, str | Path | None]] | None = None,
     #: Separate from ``registry_prefix`` because they are separate Store
     #: namespaces, but a caller that moved one has almost always moved
     #: both -- and getting this wrong is silent: every agent's
@@ -302,6 +311,11 @@ def read_fleet_snapshot(
     process state is unconditionally ``running`` because their caller is the
     live process taking the snapshot.  Registered agents still use session,
     task, and OS-process telemetry independently.
+
+    A self-agent's ``session_db`` may be ``None``: the row is still
+    reported, with ``operational_state="telemetry_missing"`` and a
+    "session telemetry missing" entry in ``telemetry_errors``, never
+    dropped from the snapshot.
     """
     observed = (observed_at or datetime.now(UTC)).astimezone(UTC)
     state_dir = Path(specialist_state_dir)

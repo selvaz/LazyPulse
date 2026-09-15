@@ -553,24 +553,27 @@ Quiet ticks don't emit, so a long-running agent's event log stays signal.
 
 ## Examples
 
-Runnable files in [`examples/`](examples/) (01, 05, 06 need no credentials):
+Runnable files in [`examples/`](examples/) (01, 05, 06, 09 need no credentials):
 
 | | |
 |---|---|
 | `01_minimal_pulse.py` | the 30-second example above |
 | `02_webhook_intake.py` | HTTP intake + `curl` recipes |
 | `03_gmail_polling.py` | full Gmail setup |
+| `04_gmail_push.py` | Gmail push notifications (`users.watch` + Pub/Sub) instead of polling |
 | `04_store_review_thin_client.py` | a reviewer CLI |
 | `05_plan_routing_deterministico.py` | route by category with a `Plan` engine |
 | `06_multi_pulse_shared_store.py` | two agents, one Store, no double-runs |
 | `07_telegram_polling.py` | watch a Telegram bot, reply only to the owner |
 | `08_outlook_local.py` | watch a local Outlook desktop inbox (Windows) |
+| `09_calendar_scheduler.py` | a `Calendar` of recurring work, plus `CalendarTools` for self-management |
 
 ## Docs
 
 - [`docs/security.md`](docs/security.md) — threat model & the trust matrix
 - [`docs/plan_engine.md`](docs/plan_engine.md) — deterministic routing with `Plan`
 - [`docs/architecture.md`](docs/architecture.md) — how it maps onto lazybridge (for contributors)
+- [`docs/fleet.md`](docs/fleet.md) — `lazypulse.fleet`: registry, supervisor, and telemetry for running several agents
 
 ## License
 

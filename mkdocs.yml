@@ -54,6 +54,7 @@ plugins:
           - launcher.md
           - architecture.md
           - plan_engine.md
+          - fleet.md
           - security.md
 
 markdown_extensions:
@@ -93,6 +94,7 @@ nav:
   - Launcher (lazypulse serve): launcher.md
   - Architecture: architecture.md
   - Plan as engine: plan_engine.md
+  - Fleet supervision: fleet.md
   - Security: security.md
   - Ecosystem:
       - lazybridge.com: https://lazybridge.com/

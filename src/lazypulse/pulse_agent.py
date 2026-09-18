@@ -133,6 +133,17 @@ class PulseAgent(Agent):
         # a worker task: return ``True`` and the message is deduped and dropped
         # from the task pipeline. Used by ``TelegramReviewer`` to close the
         # human-in-the-loop over the same inbound channel.
+        #
+        # ``schedule_filter`` answers "is there anything to wake FOR" when a
+        # schedule is otherwise about to fire, returning a skip reason or
+        # ``None``. Note its scope in a SHARED-Store deployment (see
+        # examples/06_multi_pulse_shared_store.py): every agent races for the
+        # same occurrence and the winner of the CAS imposes its own decision,
+        # so a filter installed on only some agents makes firing depend on
+        # who claimed first. Install the same filter on every agent sharing
+        # a Store, or expect exactly that. Both schedule events now carry
+        # ``decided_by`` so a divergence reads as a divergence rather than as
+        # an intermittent scheduler.
         self._action_classifier = action_classifier
         self._command_filter = command_filter
         self._schedule_filter = schedule_filter
@@ -1266,7 +1277,21 @@ class PulseAgent(Agent):
             report.missed += 1
             self._emit(
                 "pulse.schedule_missed",
-                {"schedule": record.name, "reason": skip_reason, "at": now.isoformat()},
+                {
+                    "schedule": record.name,
+                    "reason": skip_reason,
+                    "at": now.isoformat(),
+                    # Which agent's judgement this was. Several agents can
+                    # share a Store and race for the same occurrence, and
+                    # the one that wins the claim imposes ITS decision --
+                    # so with a schedule_filter installed unevenly, whether
+                    # a schedule fires depends on who got there first.
+                    # Naming the decider does not remove that, but it makes
+                    # a divergence legible in the record instead of looking
+                    # like an intermittent scheduler. Found by Codex review
+                    # on PR #50.
+                    "decided_by": self.name,
+                },
             )
             return
         self.schedule(
@@ -1278,7 +1303,15 @@ class PulseAgent(Agent):
             schedule_name=record.name,
         )
         report.fired += 1
-        self._emit("pulse.schedule_fired", {"schedule": record.name, "task_id": task_id, "at": now.isoformat()})
+        self._emit(
+            "pulse.schedule_fired",
+            {
+                "schedule": record.name,
+                "task_id": task_id,
+                "at": now.isoformat(),
+                "decided_by": self.name,  # see the missed event above
+            },
+        )
 
     def _check_rate_limit(self, rate_key: str, max_count: int) -> bool:
         """CAS-increment the rate counter. Returns ``True`` if limit exceeded."""

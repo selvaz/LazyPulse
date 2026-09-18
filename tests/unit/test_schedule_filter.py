@@ -124,3 +124,31 @@ def test_the_reason_travels_so_a_quiet_schedule_is_not_a_silent_one(reason: str)
     assert len(missed) == 1
     assert missed[0]["schedule"] == "sweep"
     assert missed[0]["reason"] == reason
+
+
+def test_both_schedule_events_name_the_agent_that_decided() -> None:
+    """Several agents can share a Store and race for the same occurrence,
+    and whoever wins the claim imposes ITS decision. With a filter
+    installed unevenly, firing then depends on who got there first.
+
+    Naming the decider does not remove that race -- it makes a divergence
+    legible in the record, instead of looking like an intermittent
+    scheduler. Found by Codex review on PR #50.
+    """
+    for skip, expected_event in ((True, "pulse.schedule_missed"), (False, "pulse.schedule_fired")):
+        clock = FakeClock(start=_START)
+        agent = _agent(clock, schedule_filter=lambda name, s=skip: "nothing_eligible" if s else None)
+        emitted: list[tuple[str, dict]] = []
+        original = agent._emit
+
+        def capture(event: str, payload: dict, _seen=emitted, _orig=original) -> None:
+            _seen.append((event, payload))
+            _orig(event, payload)
+
+        agent._emit = capture  # type: ignore[method-assign]
+        clock.advance(3600)
+        agent.tick()
+
+        matching = [payload for event, payload in emitted if event == expected_event]
+        assert len(matching) == 1, expected_event
+        assert matching[0]["decided_by"] == "cal"

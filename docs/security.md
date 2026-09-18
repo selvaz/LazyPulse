@@ -34,9 +34,18 @@ what the message says.
 | `APPROVED_SESSION` | `READ_PUBLIC`, `READ_PRIVATE`, `WRITE_LOCAL`, `EXTERNAL_SEND` |
 | `SYSTEM` | *(all)* |
 
+`ActionClass` also has a sixth value, `CODE_OR_COMPUTER` — for a message asking
+the worker to run code or drive the machine directly — which, like
+`DESTRUCTIVE`, is never in any trust level's allowed set below `SYSTEM`: it
+only ever reaches the worker through escalation, never a direct `ALLOW`.
+
 Anything not in the allowed set escalates rather than silently allowing:
 
-- verified owner asking for `EXTERNAL_SEND` / `DESTRUCTIVE` → `REQUIRE_OWNER_CONFIRMATION`
+- verified owner (`OWNER_VERIFIED_EMAIL`) asking for `EXTERNAL_SEND` /
+  `DESTRUCTIVE` / `CODE_OR_COMPUTER` → `REQUIRE_OWNER_CONFIRMATION`
+- an already-`APPROVED_SESSION` asking for `DESTRUCTIVE` / `CODE_OR_COMPUTER`
+  → `REQUIRE_OWNER_CONFIRMATION` too — being approved for `EXTERNAL_SEND`
+  does not carry over to these two
 - externally-verified stranger asking for more than `READ_PUBLIC` → `QUEUE_FOR_REVIEW`
 - everyone else → `REJECT`
 

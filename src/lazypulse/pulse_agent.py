@@ -86,6 +86,7 @@ class PulseAgent(Agent):
         adapter_backoff_cap: float = 300.0,
         action_classifier: Callable[[InboundMessage], ActionClass] | None = None,
         command_filter: Callable[[InboundMessage], bool] | None = None,
+        schedule_filter: Callable[[str], str | None] | None = None,
         scheduled_responder: Callable[[str, str, str], Any] | None = None,
         **agent_kwargs: Any,
     ) -> None:
@@ -134,6 +135,7 @@ class PulseAgent(Agent):
         # human-in-the-loop over the same inbound channel.
         self._action_classifier = action_classifier
         self._command_filter = command_filter
+        self._schedule_filter = schedule_filter
         # Optional delivery hook for completed recurring work. Schedule entries
         # must independently opt in with ``notify=True``; configuring the hook
         # alone never turns ordinary programmatic tasks into notifications.
@@ -1116,6 +1118,28 @@ class PulseAgent(Agent):
             skip_reason = "misfire_grace_exceeded"
         elif spec.overlap == "skip" and prev_status in _LIVE_STATUSES:
             skip_reason = "overlap"
+        elif self._schedule_filter is not None:
+            # Last, and only once the schedule was otherwise going to fire:
+            # the caller is asked whether there is anything to wake FOR.
+            #
+            # A schedule that fires on a timer regardless of state spends a
+            # whole agent turn to discover there is nothing to do --
+            # measured on one fleet, about a hundred such turns a week. The
+            # filter answers that from cheap local state instead.
+            #
+            # It returns a skip REASON, so a suppressed firing is recorded
+            # as `pulse.schedule_missed` carrying that reason rather than
+            # vanishing. A silent optimisation is indistinguishable from a
+            # broken scheduler, and that is the failure this must not
+            # introduce.
+            #
+            # Never raises into the tick: a filter that errors means "we do
+            # not know", and not knowing fires.
+            try:
+                skip_reason = self._schedule_filter(record.name)
+            except Exception:
+                logger.exception("schedule_filter raised for %s; firing anyway", record.name)
+                skip_reason = None
 
         self._commit_occurrence(
             key, raw, record, now, report, skip_reason=skip_reason, next_fire_at=next_fire_at, prev_status=prev_status
@@ -1152,6 +1176,28 @@ class PulseAgent(Agent):
             skip_reason = "within_window_elapsed"
         elif spec.overlap == "skip" and prev_status in _LIVE_STATUSES:
             skip_reason = "overlap"
+        elif self._schedule_filter is not None:
+            # Last, and only once the schedule was otherwise going to fire:
+            # the caller is asked whether there is anything to wake FOR.
+            #
+            # A schedule that fires on a timer regardless of state spends a
+            # whole agent turn to discover there is nothing to do --
+            # measured on one fleet, about a hundred such turns a week. The
+            # filter answers that from cheap local state instead.
+            #
+            # It returns a skip REASON, so a suppressed firing is recorded
+            # as `pulse.schedule_missed` carrying that reason rather than
+            # vanishing. A silent optimisation is indistinguishable from a
+            # broken scheduler, and that is the failure this must not
+            # introduce.
+            #
+            # Never raises into the tick: a filter that errors means "we do
+            # not know", and not knowing fires.
+            try:
+                skip_reason = self._schedule_filter(record.name)
+            except Exception:
+                logger.exception("schedule_filter raised for %s; firing anyway", record.name)
+                skip_reason = None
 
         self._commit_occurrence(
             key,

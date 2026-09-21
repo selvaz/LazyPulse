@@ -123,6 +123,43 @@ listed holiday. The date is evaluated **in the entry's own timezone**, so a
 Holidays are plain `date` objects, which keeps the filter free of any market-data
 dependency — feed it from whatever exchange calendar you already trust.
 
+### Schedule filter: is there anything to wake *for*?
+
+`PulseAgent(schedule_filter=...)` is the last check for both `Cron` and
+`After` entries, run only once a slot has already survived every other
+built-in skip check for its kind — misfire grace, overlap and the day filter
+for a `Cron`; `within` and overlap for an `After` — asking whether there is
+anything to wake *for*, not just whether it is *time*. A schedule
+that fires on a timer regardless of state spends a whole agent turn just to
+discover there is nothing to do; on one fleet that was about a hundred wasted
+turns a week. The filter answers that from cheap local state instead of
+spending the turn:
+
+```python
+def anything_to_do(schedule_name: str) -> str | None:
+    if schedule_name == "etf_daily_stats" and market_is_closed_today():
+        return "market_closed"
+    return None   # None = let it fire
+
+pulse = PulseAgent(..., calendar=calendar, schedule_filter=anything_to_do)
+```
+
+- **Signature:** `(schedule_name: str) -> str | None`. Returning a string
+  suppresses the firing and becomes that occurrence's skip reason; returning
+  `None` lets it fire.
+- **A suppressed firing is still recorded**, as `pulse.schedule_missed` with
+  the filter's own reason string — never silently swallowed. A silent
+  optimisation is indistinguishable from a broken scheduler, which is exactly
+  the failure this must not introduce.
+- **Fail-open, not fail-closed.** An exception from the filter is logged and
+  treated as "we do not know" — the schedule fires anyway, on the theory that
+  not knowing should fire, not skip.
+- **Shared-Store caveat.** Several `PulseAgent`s can share one `Store` and
+  race for the same occurrence; whichever one wins the claim imposes *its own*
+  filter's decision. Installing `schedule_filter` on only some of the agents
+  sharing a Store makes firing depend on who claimed first. Install the same
+  filter on every agent sharing a Store, or expect exactly that divergence.
+
 ## `After`: depend on completion, not on the clock
 
 A follow-up job scheduled 30 minutes after its predecessor is a guess. When the
@@ -164,9 +201,14 @@ for a week is visible rather than inferred from missing Telegram messages.
 reads as one failure however many slots are skipped after it.
 
 Session events: `pulse.schedule_fired`, `pulse.schedule_missed` (with a `reason`
-of `misfire_grace_exceeded`, `non_business_day`, `overlap` or
-`within_window_elapsed`), and `pulse.schedule_error`. `TickReport` gains `fired`
-and `missed`.
+of `misfire_grace_exceeded`, `non_business_day`, `overlap`,
+`within_window_elapsed`, or — when `schedule_filter` suppressed the firing —
+whatever reason string the filter itself returned), and `pulse.schedule_error`.
+Both `pulse.schedule_fired` and `pulse.schedule_missed` also carry
+`decided_by`, the name of the agent whose judgement produced that event —
+relevant when several agents share a Store and race for the same occurrence,
+since the winner's `schedule_filter` decision is the one that's recorded.
+`TickReport` gains `fired` and `missed`.
 
 For one-off ad-hoc entries there is `schedule_cron(name, text, expr, ...)` and
 the generic `add_schedule(entry)`. Prefer a `Calendar` for anything that should

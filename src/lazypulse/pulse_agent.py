@@ -63,6 +63,22 @@ _MAX_RESTARTS = 3
 #: whole task space, so it runs at most this often rather than every tick.
 _PRUNE_INTERVAL = 60.0
 
+#: Hard cap on how many ticks a message may be redrained and fail intake
+#: before it is dead-lettered outright, independent of *why* it fails --
+#: a bug in a ``command_filter``, a ``KeyError``, an HTTP 4xx/5xx from
+#: whatever service that filter or a classifier happened to call. A single
+#: failure alone can't tell "will heal on retry" from "never will" (and
+#: guessing from an error string risks misclassifying a failure from some
+#: unrelated service as a permanent one), so every failure is bounded the
+#: same way instead of trying to special-case any of them. Matches the
+#: reliability plan's actual goal ("no infinite retries"), not just "no 4xx".
+#:
+#: Known gap: adapters that do not redrain (e.g. ``WebhookAdapter``, which
+#: sees each delivery once) leave a failure counter that is never cleaned
+#: up if the message is never retried by the adapter itself. Accepted,
+#: low volume.
+MAX_INTAKE_ATTEMPTS = 5
+
 logger = logging.getLogger(__name__)
 
 
@@ -554,10 +570,25 @@ class PulseAgent(Agent):
             try:
                 self._intake(msg, now, report)
             except Exception as exc:
-                self._emit(
-                    "pulse.intake_error",
-                    {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}"},
-                )
+                # Raising here skips the event marker _intake would otherwise
+                # write, and an at-least-once adapter's watermark (e.g.
+                # TelegramInbox.drain) only advances past a *recorded*
+                # update — so, left alone, the same update gets redrained and
+                # re-raises on every following tick, forever, with no
+                # backoff (observed live: 10 consecutive ticks on one
+                # message_id, each a fresh failed Telegram sendMessage from a
+                # command_filter's own synchronous notify()). A single
+                # failure can't tell "will heal on retry" (a 5xx, a timeout)
+                # from "never will" (a bad request, a bug in a
+                # command_filter) — so every failure is bounded the same way,
+                # by MAX_INTAKE_ATTEMPTS, rather than guessing per exception.
+                self._handle_intake_failure(msg, exc)
+            else:
+                assert self.store is not None  # guaranteed whenever there are adapters to drain
+                # A prior failure's counter (if any) no longer applies once
+                # intake succeeds — leaving it would let an unrelated later
+                # failure inherit stale attempts and dead-letter early.
+                self.store.delete(store_keys.intake_failures_key(msg.message_id))
 
         due = self._collect_due(now)
         # Skip tasks already dispatched by an earlier tick (background mode):
@@ -725,6 +756,54 @@ class PulseAgent(Agent):
         self.store.write(store_keys.task_key(record.task_id), record.model_dump(mode="json"))
         if record.source_event_id is not None:
             self.store.write(store_keys.event_key(record.source_event_id), {"task_id": record.task_id})
+
+    # ------------------------------------------------------------------ #
+    # Intake failure bookkeeping (see ``tick_once``)
+    # ------------------------------------------------------------------ #
+    def _intake_failure_count(self, message_id: str) -> int:
+        assert self.store is not None
+        raw = self.store.read(store_keys.intake_failures_key(message_id))
+        if not isinstance(raw, dict):
+            return 0
+        try:
+            return int(raw.get("count", 0))
+        except (TypeError, ValueError):
+            return 0
+
+    def _handle_intake_failure(self, msg: InboundMessage, exc: Exception) -> None:
+        """React to ``_intake`` raising for ``msg``: dead-letter it once a
+        per-message failure counter hits ``MAX_INTAKE_ATTEMPTS``, or bump
+        that counter and let it be redrained next tick."""
+        assert self.store is not None  # guaranteed whenever there are adapters to drain
+        attempt = self._intake_failure_count(msg.message_id) + 1
+        if attempt >= MAX_INTAKE_ATTEMPTS:
+            self._dead_letter_intake(msg, exc, attempts=attempt, reason="max_attempts")
+            return
+        self.store.write(
+            store_keys.intake_failures_key(msg.message_id),
+            {"count": attempt, "last_error": f"{type(exc).__name__}: {exc}"},
+        )
+        self._emit(
+            "pulse.intake_error",
+            {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}", "attempt": attempt},
+        )
+
+    def _dead_letter_intake(self, msg: InboundMessage, exc: Exception, *, attempts: int, reason: str) -> None:
+        """Mark ``msg`` consumed the same way a processed message is marked
+        (so an at-least-once adapter's watermark advances past it), drop the
+        now-irrelevant failure counter, and record the drop."""
+        assert self.store is not None
+        self.store.write(store_keys.event_key(msg.message_id), {"dead_letter": True})
+        self.store.delete(store_keys.intake_failures_key(msg.message_id))
+        self._emit(
+            "pulse.intake_dead_letter",
+            {
+                "message_id": msg.message_id,
+                "error": f"{type(exc).__name__}: {exc}",
+                "attempts": attempts,
+                "reason": reason,
+            },
+        )
 
     def _authorize(self, msg: InboundMessage) -> tuple[Identity, PolicyDecision]:
         # No policy → dev mode: everything is allowed. Useful for local

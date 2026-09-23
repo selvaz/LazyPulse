@@ -61,6 +61,15 @@ SCHEDULE_PREFIX = "pulse:schedule:"
 RATE_KEY = "pulse:rate:{sender}:{window_bucket}"
 RATE_PREFIX = "pulse:rate:"
 
+#: Per-message intake failure counter: ``{"count": n, "last_error": "..."}``.
+#: Written by ``PulseAgent.tick_once`` each time ``_intake`` raises for a
+#: message that is not (yet) dead-lettered, so a repeat offender can be
+#: dead-lettered once it hits ``MAX_INTAKE_ATTEMPTS`` even when no single
+#: failure is individually recognizable as permanent. Deleted as soon as the
+#: message either succeeds or is dead-lettered -- it exists only to bound the
+#: retry loop, not as a durable log.
+INTAKE_FAILURES = "pulse:intake_failures:{event_id}"
+
 
 def task_key(task_id: str) -> str:
     return TASK.format(task_id=task_id)
@@ -68,6 +77,10 @@ def task_key(task_id: str) -> str:
 
 def event_key(event_id: str) -> str:
     return EVENT.format(event_id=event_id)
+
+
+def intake_failures_key(event_id: str) -> str:
+    return INTAKE_FAILURES.format(event_id=event_id)
 
 
 def schedule_key(name: str) -> str:

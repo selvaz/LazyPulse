@@ -34,7 +34,6 @@ from lazybridge import Agent
 from lazypulse import store_keys
 from lazypulse._context import active_task_id
 from lazypulse.adapters.base import Responder
-from lazypulse.adapters.telegram_errors import is_permanent_telegram_error
 from lazypulse.models import (
     ActionClass,
     Identity,
@@ -65,12 +64,19 @@ _MAX_RESTARTS = 3
 _PRUNE_INTERVAL = 60.0
 
 #: Hard cap on how many ticks a message may be redrained and fail intake
-#: before it is dead-lettered outright, independent of *why* it fails. A
-#: recognizable permanent Telegram 4xx is dead-lettered immediately (see
-#: ``is_permanent_telegram_error``); this cap catches everything else that
-#: would otherwise retry forever with no backoff -- a bug in a
-#: ``command_filter``, a ``KeyError``, a 5xx that never recovers. Matches the
-#: reliability plan's goal ("no infinite retries"), not just "no 4xx".
+#: before it is dead-lettered outright, independent of *why* it fails --
+#: a bug in a ``command_filter``, a ``KeyError``, an HTTP 4xx/5xx from
+#: whatever service that filter or a classifier happened to call. A single
+#: failure alone can't tell "will heal on retry" from "never will" (and
+#: guessing from an error string risks misclassifying a failure from some
+#: unrelated service as a permanent one), so every failure is bounded the
+#: same way instead of trying to special-case any of them. Matches the
+#: reliability plan's actual goal ("no infinite retries"), not just "no 4xx".
+#:
+#: Known gap: adapters that do not redrain (e.g. ``WebhookAdapter``, which
+#: sees each delivery once) leave a failure counter that is never cleaned
+#: up if the message is never retried by the adapter itself. Accepted,
+#: low volume.
 MAX_INTAKE_ATTEMPTS = 5
 
 logger = logging.getLogger(__name__)
@@ -571,12 +577,11 @@ class PulseAgent(Agent):
                 # re-raises on every following tick, forever, with no
                 # backoff (observed live: 10 consecutive ticks on one
                 # message_id, each a fresh failed Telegram sendMessage from a
-                # command_filter's own synchronous notify()). Two ways out:
-                # a recognizably permanent Telegram 4xx is dead-lettered on
-                # the spot; anything else — a command_filter bug, a
-                # KeyError, a 5xx that never recovers — is bounded by
-                # MAX_INTAKE_ATTEMPTS instead, since a single failure alone
-                # cannot tell "will heal on retry" from "never will".
+                # command_filter's own synchronous notify()). A single
+                # failure can't tell "will heal on retry" (a 5xx, a timeout)
+                # from "never will" (a bad request, a bug in a
+                # command_filter) — so every failure is bounded the same way,
+                # by MAX_INTAKE_ATTEMPTS, rather than guessing per exception.
                 self._handle_intake_failure(msg, exc)
             else:
                 assert self.store is not None  # guaranteed whenever there are adapters to drain
@@ -766,15 +771,10 @@ class PulseAgent(Agent):
             return 0
 
     def _handle_intake_failure(self, msg: InboundMessage, exc: Exception) -> None:
-        """React to ``_intake`` raising for ``msg``: dead-letter it outright
-        for a recognizably permanent Telegram 4xx, dead-letter it once a
+        """React to ``_intake`` raising for ``msg``: dead-letter it once a
         per-message failure counter hits ``MAX_INTAKE_ATTEMPTS``, or bump
         that counter and let it be redrained next tick."""
         assert self.store is not None  # guaranteed whenever there are adapters to drain
-        if is_permanent_telegram_error(exc):
-            attempts = self._intake_failure_count(msg.message_id) + 1
-            self._dead_letter_intake(msg, exc, attempts=attempts, reason="permanent_telegram_error")
-            return
         attempt = self._intake_failure_count(msg.message_id) + 1
         if attempt >= MAX_INTAKE_ATTEMPTS:
             self._dead_letter_intake(msg, exc, attempts=attempt, reason="max_attempts")

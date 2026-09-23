@@ -9,9 +9,21 @@ synchronously inside ``PulseAgent._intake`` — in that incident, by a
 ``command_filter``'s own reply) happened *before* the event marker
 ``_intake`` would otherwise write, so ``TelegramInbox``'s at-least-once
 watermark never advanced past the update and the adapter kept handing it
-back every tick, forever, with no backoff. A 4xx other than 429 will never
-succeed by retrying; a 429/5xx/timeout might, so those must keep being
-retried exactly as before.
+back every tick, forever, with no backoff.
+
+Two independent guards close that loop:
+
+* a recognizable permanent Telegram 4xx (not 429) is dead-lettered
+  immediately — it will never succeed by retrying;
+* anything else — an unrecognizable message, a 429, a 5xx, a plain bug in a
+  ``command_filter`` — is bounded by a per-message failure counter
+  (``store_keys.intake_failures_key``): retried under
+  ``pulse_agent.MAX_INTAKE_ATTEMPTS``, dead-lettered once it hits the cap.
+  The plan's goal is "no infinite retries", not just "no 4xx".
+
+The counter is deleted the moment a message either succeeds or is
+dead-lettered, so it never accumulates stale state for messages that were
+merely retried once and then went on to succeed.
 """
 
 from __future__ import annotations
@@ -19,15 +31,26 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import UTC, datetime
 
-from lazybridge import Store
+from lazybridge import Session, Store
+from lazybridge.exporters import CallbackExporter
 from pydantic import PrivateAttr
 
 from lazypulse import InboundMessage, PulseAgent, store_keys
 from lazypulse.adapters.telegram_errors import is_permanent_telegram_error, telegram_error_status
-from lazypulse.models import Identity
+from lazypulse.models import Identity, TrustLevel
 from lazypulse.models import InboundMessage as IM
 from lazypulse.policy import PulsePolicy
+from lazypulse.pulse_agent import MAX_INTAKE_ATTEMPTS
 from lazypulse.testing import FakeClock, MockEngine
+
+
+def _capturing_session() -> tuple[Session, list[dict[str, object]]]:
+    """A Session whose emitted events are collected into a plain list, so
+    tests can assert on ``pulse.intake_error`` / ``pulse.intake_dead_letter``
+    payloads (``attempt`` / ``attempts`` / ``reason``) instead of only on
+    Store state."""
+    events: list[dict[str, object]] = []
+    return Session(exporters=[CallbackExporter(fn=events.append)]), events
 
 
 def _telegram_client_error(method: str, status: int, reason: str = "Bad Request") -> RuntimeError:
@@ -135,14 +158,16 @@ class RaisingPolicy(PulsePolicy):
         raise AssertionError("classify raises before authorize is ever called")
 
 
-async def test_permanent_error_dead_letters_and_stops_reprocessing() -> None:
+async def test_permanent_error_dead_letters_immediately_and_stops_reprocessing() -> None:
     clock = FakeClock()
     store = Store()
+    session, events = _capturing_session()
     adapter = WatermarkAdapter([_msg("telegram:bot:1")])
     pulse = PulseAgent(
         name="p",
         engine=MockEngine(["unused"]),
         store=store,
+        session=session,
         clock=clock,
         policy=RaisingPolicy(lambda: _telegram_client_error("sendMessage", 400)),
         adapters=[adapter],
@@ -150,9 +175,16 @@ async def test_permanent_error_dead_letters_and_stops_reprocessing() -> None:
 
     report1 = await pulse.tick_once()
     assert report1.drained == 1
-    # The event marker now exists, dead-lettered rather than "processed".
+    # The event marker now exists, dead-lettered rather than "processed" --
+    # on the very first failure, no need to accumulate toward the cap.
     marker = store.read(store_keys.event_key("telegram:bot:1"))
     assert marker == {"dead_letter": True}
+    # No leftover failure counter for a message that's already terminal.
+    assert store.read(store_keys.intake_failures_key("telegram:bot:1")) is None
+    dead_letters = [e for e in events if e["event_type"] == "pulse.intake_dead_letter"]
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["attempts"] == 1
+    assert dead_letters[0]["reason"] == "permanent_telegram_error"
 
     # Next tick: the adapter's own watermark logic (like the real
     # TelegramInbox) no longer hands the message back, so intake never runs
@@ -161,7 +193,55 @@ async def test_permanent_error_dead_letters_and_stops_reprocessing() -> None:
     assert report2.drained == 0
 
 
-async def test_429_keeps_retrying_like_today() -> None:
+async def test_generic_exception_retried_then_dead_lettered_at_the_attempt_cap() -> None:
+    # No Telegram-shaped status at all -- e.g. a bug in a command_filter, a
+    # KeyError, anything. Must still eventually stop, per the plan's actual
+    # goal ("no infinite retries"), not just "no 4xx".
+    clock = FakeClock()
+    store = Store()
+    session, events = _capturing_session()
+    message_id = "telegram:bot:boom"
+    adapter = WatermarkAdapter([_msg(message_id)])
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["unused"]),
+        store=store,
+        session=session,
+        clock=clock,
+        policy=RaisingPolicy(lambda: RuntimeError("boom")),
+        adapters=[adapter],
+    )
+
+    for attempt in range(1, MAX_INTAKE_ATTEMPTS):
+        report = await pulse.tick_once()
+        assert report.drained == 1, f"expected a redrain on attempt {attempt}"
+        assert store.read(store_keys.event_key(message_id)) is None  # not dead-lettered yet
+        counter = store.read(store_keys.intake_failures_key(message_id))
+        assert counter == {"count": attempt, "last_error": "RuntimeError: boom"}
+
+    # The MAX_INTAKE_ATTEMPTS-th failure trips the cap.
+    report_final = await pulse.tick_once()
+    assert report_final.drained == 1
+    assert store.read(store_keys.event_key(message_id)) == {"dead_letter": True}
+    assert store.read(store_keys.intake_failures_key(message_id)) is None  # counter cleared
+
+    error_events = [e for e in events if e["event_type"] == "pulse.intake_error"]
+    assert [e["attempt"] for e in error_events] == list(range(1, MAX_INTAKE_ATTEMPTS))
+    dead_letters = [e for e in events if e["event_type"] == "pulse.intake_dead_letter"]
+    assert len(dead_letters) == 1
+    assert dead_letters[0]["attempts"] == MAX_INTAKE_ATTEMPTS
+    assert dead_letters[0]["reason"] == "max_attempts"
+
+    # And now it's actually over: no further redrain, no further failure.
+    report_after = await pulse.tick_once()
+    assert report_after.drained == 0
+
+
+async def test_429_retried_below_the_cap_then_dead_lettered_at_it() -> None:
+    # 429 is never a *permanent* Telegram error (it's meant to be retried),
+    # but it is not exempt from the generic attempt cap either -- a bot
+    # permanently rate-limited must not spin forever any more than one
+    # hitting a real bug would.
     clock = FakeClock()
     store = Store()
     adapter = WatermarkAdapter([_msg("telegram:bot:2")])
@@ -174,15 +254,18 @@ async def test_429_keeps_retrying_like_today() -> None:
         adapters=[adapter],
     )
 
-    await pulse.tick_once()
-    assert store.read(store_keys.event_key("telegram:bot:2")) is None  # not dead-lettered
+    for _ in range(MAX_INTAKE_ATTEMPTS - 1):
+        await pulse.tick_once()
+        assert store.read(store_keys.event_key("telegram:bot:2")) is None  # still retried
 
-    # Unchanged from today: still redrained and still raises next tick.
-    report2 = await pulse.tick_once()
-    assert report2.drained == 1
+    await pulse.tick_once()  # the MAX_INTAKE_ATTEMPTS-th failure
+    assert store.read(store_keys.event_key("telegram:bot:2")) == {"dead_letter": True}
+
+    report_after = await pulse.tick_once()
+    assert report_after.drained == 0
 
 
-async def test_5xx_keeps_retrying_like_today() -> None:
+async def test_5xx_keeps_retrying_below_the_cap() -> None:
     clock = FakeClock()
     store = Store()
     adapter = WatermarkAdapter([_msg("telegram:bot:3")])
@@ -202,7 +285,7 @@ async def test_5xx_keeps_retrying_like_today() -> None:
     assert report2.drained == 1
 
 
-async def test_timeout_keeps_retrying_like_today() -> None:
+async def test_timeout_keeps_retrying_below_the_cap() -> None:
     clock = FakeClock()
     store = Store()
     adapter = WatermarkAdapter([_msg("telegram:bot:4")])
@@ -220,4 +303,51 @@ async def test_timeout_keeps_retrying_like_today() -> None:
 
     report2 = await pulse.tick_once()
     assert report2.drained == 1
+
+
+async def test_failure_counter_cleared_once_message_succeeds() -> None:
+    # A message that fails a couple of times and then goes through must not
+    # carry any leftover counter -- a later, unrelated re-emission of the
+    # same message_id (however unlikely) must not inherit stale attempts.
+    clock = FakeClock()
+    store = Store()
+    session, events = _capturing_session()
+    message_id = "telegram:bot:flaky"
+    calls = {"n": 0}
+
+    class FlakyThenOkPolicy(PulsePolicy):
+        def classify(self, inbound: IM) -> Identity:
+            calls["n"] += 1
+            if calls["n"] <= 2:
+                raise RuntimeError("still warming up")
+            return Identity(sender=inbound.sender_raw, trust=TrustLevel.SYSTEM)
+
+    adapter = WatermarkAdapter([_msg(message_id)])
+    pulse = PulseAgent(
+        name="p",
+        engine=MockEngine(["unused"]),
+        store=store,
+        session=session,
+        clock=clock,
+        policy=FlakyThenOkPolicy(),
+        adapters=[adapter],
+    )
+
+    await pulse.tick_once()  # fails, count -> 1
+    await pulse.tick_once()  # fails, count -> 2
+    assert store.read(store_keys.intake_failures_key(message_id)) == {
+        "count": 2,
+        "last_error": "RuntimeError: still warming up",
+    }
+
+    await pulse.tick_once()  # succeeds
+    assert store.read(store_keys.intake_failures_key(message_id)) is None
+    assert store.read(store_keys.event_key(message_id)) is not None  # recorded normally (not dead_letter)
+    assert store.read(store_keys.event_key(message_id)) != {"dead_letter": True}
+    assert not any(e["event_type"] == "pulse.intake_dead_letter" for e in events)
+
+    # Message is now genuinely processed -- the adapter's own watermark
+    # logic won't hand it back either.
+    report_final = await pulse.tick_once()
+    assert report_final.drained == 0
 

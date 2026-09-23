@@ -34,6 +34,7 @@ from lazybridge import Agent
 from lazypulse import store_keys
 from lazypulse._context import active_task_id
 from lazypulse.adapters.base import Responder
+from lazypulse.adapters.telegram_errors import is_permanent_telegram_error
 from lazypulse.models import (
     ActionClass,
     Identity,
@@ -554,10 +555,31 @@ class PulseAgent(Agent):
             try:
                 self._intake(msg, now, report)
             except Exception as exc:
-                self._emit(
-                    "pulse.intake_error",
-                    {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}"},
-                )
+                if is_permanent_telegram_error(exc):
+                    # A permanent (4xx, not 429) Telegram delivery failure raised
+                    # synchronously during intake — e.g. a command_filter's own
+                    # notify() — will not be fixed by seeing this update again.
+                    # And today it WOULD be seen again: raising here skips the
+                    # event marker _intake would otherwise write, and the
+                    # adapter's at-least-once watermark (TelegramInbox.drain)
+                    # only advances past a *recorded* update — so the same
+                    # update gets redrained and re-raises on every following
+                    # tick forever (observed live: 10 consecutive ticks on one
+                    # message_id, each a fresh failed sendMessage). Mark it
+                    # consumed the same way a processed message is marked, so
+                    # the watermark advances, and record the drop instead of
+                    # spinning on it.
+                    assert self.store is not None  # guaranteed whenever there are adapters to drain
+                    self.store.write(store_keys.event_key(msg.message_id), {"dead_letter": True})
+                    self._emit(
+                        "pulse.intake_dead_letter",
+                        {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}"},
+                    )
+                else:
+                    self._emit(
+                        "pulse.intake_error",
+                        {"message_id": msg.message_id, "error": f"{type(exc).__name__}: {exc}"},
+                    )
 
         due = self._collect_due(now)
         # Skip tasks already dispatched by an earlier tick (background mode):

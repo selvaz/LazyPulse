@@ -140,6 +140,10 @@ def _run_specialist_process_query() -> str | None:
             ],
             capture_output=True,
             text=True,
+            # errors="replace": a command line with a byte the codepage cannot decode must not kill the
+            # reader thread (seen live in LazyCEO: cp1252 + 0x9d -> stdout None).
+            encoding="utf-8",
+            errors="replace",
             timeout=15,
             check=False,
         )

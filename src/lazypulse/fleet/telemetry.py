@@ -135,6 +135,7 @@ def _run_specialist_process_query() -> str | None:
                 "powershell",
                 "-NoProfile",
                 "-Command",
+                "[Console]::OutputEncoding = [System.Text.Encoding]::UTF8; "
                 "Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" "
                 "| Select-Object -ExpandProperty CommandLine",
             ],

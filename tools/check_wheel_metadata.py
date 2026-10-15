@@ -24,7 +24,7 @@ REPO_ROOT = pathlib.Path(__file__).resolve().parent.parent
 # Requirements that MUST appear (as parsed name + specifier set) in the
 # wheel's Requires-Dist.
 REQUIRED = [
-    "lazybridge>=1.0.1,<2.0",
+    "lazybridge>=1.8.1,<2.0",
     "pydantic>=2.0.0,<3.0.0",
 ]
 

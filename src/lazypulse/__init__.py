@@ -78,10 +78,10 @@ try:
     try:
         __version__ = _dist_version("lazypulse")
     except PackageNotFoundError:  # pragma: no cover — uninstalled source tree
-        __version__ = "0.3.2"
+        __version__ = "0.5.4"
     del _dist_version, PackageNotFoundError
 except ImportError:  # pragma: no cover — Python < 3.8, unsupported
-    __version__ = "0.3.2"
+    __version__ = "0.5.4"
 
 if TYPE_CHECKING:
     from lazytools.connectors.gmail import GmailTools

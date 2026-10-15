@@ -23,7 +23,7 @@ an arbitrary `main`:
 
 ```bash
 python -m pip install \
-  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@v0.5.0"
+  "lazytoolkit @ git+https://github.com/selvaz/LazyTools.git@v0.10.2"
 ```
 
 > Note: the distribution is named `lazytoolkit` but imports as `lazytools`

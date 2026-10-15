@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.4] — 2026-10-15
+
+### Changed
+- `lazytoolkit` extras (`gmail`, `outlook`, `telegram`, dev) pinned to `v0.10.2` and
+  `lazybridge>=1.8.1,<2.0`, for the `ecosystem-2026.10` release train. The source-tree
+  fallback `__version__` now matches the package version.
+
 ### Added
 - **`lazypulse.fleet`** — generic always-on fleet infrastructure promoted
   from LazyCEO: a Store-backed supervised-agent registry, durable planned-stop

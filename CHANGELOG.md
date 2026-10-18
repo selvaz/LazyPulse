@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.5] — 2026-10-18
+
+Release set `ecosystem-2026.10.3`. Only sibling pins move; no code changes.
+
+### Changed
+- `lazytoolkit` pinned at `v0.10.3` (was `v0.10.2`) in the core dependency and the `gmail`, `outlook` and `telegram` extras, and in `deploy/tg-bot/requirements.txt`; that file now installs `lazypulse` `v0.5.5`. The source-tree fallback `__version__` matches the package version.
+
 ## [0.5.4] — 2026-10-15
 
 ### Changed

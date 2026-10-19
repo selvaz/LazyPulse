@@ -5,7 +5,7 @@ lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git@v0.10.4
 # `cron` non è opzionale qui: CALENDAR_FILE con una schedule cron importa
 # croniter durante la sync del calendario, quindi senza l'extra il bot non
 # partirebbe proprio nel momento in cui gli dai un calendario.
-lazypulse[telegram,cron] @ git+https://github.com/selvaz/LazyPulse.git@v0.5.5
+lazypulse[telegram,cron] @ git+https://github.com/selvaz/LazyPulse.git@v0.5.6
 # Crawler web: [nlp] abilita CRAWL_CONTENT=ml (modelli locali); [search] installa
 # 'ddgs', necessario al backend DuckDuckGo di web_search (altrimenti fallisce a
 # runtime). Repo pubblico → niente token.

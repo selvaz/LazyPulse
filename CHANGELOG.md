@@ -7,6 +7,13 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.6] — 2026-10-19
+
+Release set `ecosystem-2026.10.6`. Only sibling pins move; no code changes.
+
+### Changed
+- `lazytoolkit` `v0.10.3` -> `v0.10.4` in every extra and in `deploy/tg-bot/requirements.txt`, where `lazycrawler` moves `v0.19.6` -> `v0.19.7`.
+
 ## [0.5.5] — 2026-10-18
 
 Release set `ecosystem-2026.10.3`. Only sibling pins move; no code changes.

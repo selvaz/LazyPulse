@@ -7,6 +7,11 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ## [Unreleased]
 
+## [0.5.7] — 2026-10-30
+
+### Changed
+- Sibling pins moved to the 2026-10-30 release set: LazyTools v0.10.5, LazyPulse v0.5.7.
+
 ## [0.5.6] — 2026-10-19
 
 Release set `ecosystem-2026.10.6`. Only sibling pins move; no code changes.

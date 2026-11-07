@@ -1,7 +1,7 @@
 # Release set ecosystem-2026.10: lazybridge da PyPI, il resto ai tag di rilascio su GitHub.
 # I tre repo sono pubblici, quindi il build non richiede alcun token.
-lazybridge[deepseek]==1.8.4
-lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git@v0.10.5
+lazybridge[deepseek]==1.8.6
+lazytoolkit[telegram] @ git+https://github.com/selvaz/LazyTools.git@v0.10.6
 # `cron` non è opzionale qui: CALENDAR_FILE con una schedule cron importa
 # croniter durante la sync del calendario, quindi senza l'extra il bot non
 # partirebbe proprio nel momento in cui gli dai un calendario.

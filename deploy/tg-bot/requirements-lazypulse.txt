@@ -1,0 +1,8 @@
+# LazyPulse si installa con `pip install --no-deps` (vedi Dockerfile).
+# Il tag v0.5.7 dichiara nei suoi extra lazytoolkit v0.10.5, mentre questo deploy
+# pinna v0.10.6 in requirements.txt: con una sola risoluzione pip fallirebbe con
+# ResolutionImpossible. Le dipendenze di lazypulse[telegram,cron] sono già
+# pinnate in requirements.txt, quindi saltare la risoluzione è sicuro.
+# Quando uscirà un tag LazyPulse che dichiara lazytoolkit v0.10.6, questo file
+# può tornare una riga normale `lazypulse[telegram,cron] @ ...` in requirements.txt.
+lazypulse @ git+https://github.com/selvaz/LazyPulse.git@v0.5.7

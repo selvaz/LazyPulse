@@ -247,13 +247,16 @@ def test_owner_chat_id_defaults_to_the_owner_and_is_overridable(monkeypatch: pyt
     assert LauncherConfig.from_env().owner_chat_id == -1009999
 
 
-def test_the_deploy_image_installs_the_cron_extra() -> None:
+def test_the_deploy_image_installs_croniter() -> None:
     """CALENDAR_FILE with a cron entry imports croniter during sync, so the
-    deployment that documents the calendar flow has to ship the extra."""
-    root = Path(__file__).resolve().parents[2]
-    requirements = (root / "deploy" / "tg-bot" / "requirements.txt").read_text(encoding="utf-8")
-    line = next(line for line in requirements.splitlines() if line.startswith("lazypulse["))
-    assert "cron" in line, line
+    deployment that documents the calendar flow has to ship it. LazyPulse is
+    installed with ``--no-deps`` (see requirements-lazypulse.txt), so croniter
+    is declared directly instead of through the ``cron`` extra."""
+    deploy = Path(__file__).resolve().parents[2] / "deploy" / "tg-bot"
+    requirements = (deploy / "requirements.txt").read_text(encoding="utf-8")
+    assert any(line.startswith("croniter") for line in requirements.splitlines())
+    dockerfile = (deploy / "Dockerfile").read_text(encoding="utf-8")
+    assert "--no-deps -r requirements-lazypulse.txt" in dockerfile
 
 
 # --- CLI ----------------------------------------------------------------- #

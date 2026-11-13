@@ -10,6 +10,7 @@ resto dalla dashboard web.
   dedup, flusso HITL, recovery, retention). Vedi in fondo.
 - `Dockerfile` — immagine pronta (installa le 3 librerie dai repo pubblici).
 - `requirements.txt` — dipendenze (API moderna da GitHub).
+- `requirements-lazypulse.txt` — LazyPulse, installato con `--no-deps` (vedi il file).
 
 > **Il motore del bot vive nel pacchetto.** Inbox Telegram, policy owner-only,
 > human-in-the-loop, recovery, retention e calendario ricorrente stanno in
